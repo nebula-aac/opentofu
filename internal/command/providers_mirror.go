@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -33,6 +35,7 @@ func (c *ProvidersMirrorCommand) Synopsis() string {
 func (c *ProvidersMirrorCommand) Run(args []string) int {
 	args = c.Meta.process(args)
 	cmdFlags := c.Meta.defaultFlagSet("providers mirror")
+	c.Meta.varFlagSet(cmdFlags)
 	var optPlatforms FlagStringSlice
 	cmdFlags.Var(&optPlatforms, "platform", "target platform")
 	cmdFlags.Usage = func() { c.Ui.Error(c.Help()) }
@@ -161,6 +164,14 @@ func (c *ProvidersMirrorCommand) Run(args []string) int {
 		}
 		selected := candidates.Newest()
 		if !lockedDeps.Empty() {
+			if lockedDeps.Provider(provider) == nil {
+				diags = diags.Append(tfdiags.Sourceless(
+					tfdiags.Error,
+					"Provider not found in lockfile",
+					fmt.Sprintf("Failed to find %s in the lock file", provider.String()),
+				))
+				continue
+			}
 			selected = lockedDeps.Provider(provider).Version()
 			c.Ui.Output(fmt.Sprintf("  - Selected v%s to match dependency lock file", selected.String()))
 		} else if len(constraintsStr) > 0 {
@@ -378,5 +389,14 @@ Options:
                      Linux operating system running on an AMD64 or x86_64
                      CPU. Each provider is available only for a limited
                      set of target platforms.
+
+  -var 'foo=bar'     Set a value for one of the input variables in the root
+                     module of the configuration. Use this option more than
+                     once to set more than one variable.
+
+  -var-file=filename Load variable values from the given file, in addition
+                     to the default files terraform.tfvars and *.auto.tfvars.
+                     Use this option more than once to include more than one
+                     variables file.
 `
 }

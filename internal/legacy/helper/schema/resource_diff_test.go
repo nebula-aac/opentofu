@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package schema
@@ -129,7 +131,7 @@ func testDiffCases(t *testing.T, oldPrefix string, oldOffset int, computed bool)
 							NewComputed: true,
 						}
 					} else {
-						result["foo.2800005064"] = &tofu.ResourceAttrDiff{
+						result["foo.1494962232"] = &tofu.ResourceAttrDiff{
 							Old: "",
 							New: "qux",
 						}

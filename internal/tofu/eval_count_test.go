@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -32,7 +34,7 @@ func TestEvaluateCountExpression(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ctx := &MockEvalContext{}
 			ctx.installSimpleEval()
-			countVal, diags := evaluateCountExpression(test.Expr, ctx)
+			countVal, diags := evaluateCountExpression(test.Expr, ctx, nil)
 
 			if len(diags) != 0 {
 				t.Errorf("unexpected diagnostics %s", spew.Sdump(diags))

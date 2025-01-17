@@ -1,11 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
 
 import (
-	"context"
-
 	"github.com/posener/complete"
 )
 
@@ -55,14 +55,20 @@ func (m *Meta) completePredictWorkspaceName() complete.Predictor {
 			return nil
 		}
 
+		// Load the encryption configuration
+		enc, encDiags := m.Encryption()
+		if encDiags.HasErrors() {
+			return nil
+		}
+
 		b, diags := m.Backend(&BackendOpts{
 			Config: backendConfig,
-		})
+		}, enc.State())
 		if diags.HasErrors() {
 			return nil
 		}
 
-		names, _ := b.Workspaces(context.TODO())
+		names, _ := b.Workspaces()
 		return names
 	})
 }

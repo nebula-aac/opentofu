@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -18,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/hcldec"
 	"github.com/zclconf/go-cty/cty"
 	ctyjson "github.com/zclconf/go-cty/cty/json"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/opentofu/opentofu/internal/command/clistate"
 	"github.com/opentofu/opentofu/internal/command/views"
 	"github.com/opentofu/opentofu/internal/configs"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/plans"
 	"github.com/opentofu/opentofu/internal/states/statemgr"
 	"github.com/opentofu/opentofu/internal/tfdiags"
@@ -89,7 +91,7 @@ type BackendWithRemoteTerraformVersion interface {
 // A side-effect of this method is the population of m.backendState, recording
 // the final resolved backend configuration after dealing with overrides from
 // the "tofu init" command line, etc.
-func (m *Meta) Backend(opts *BackendOpts) (backend.Enhanced, tfdiags.Diagnostics) {
+func (m *Meta) Backend(opts *BackendOpts, enc encryption.StateEncryption) (backend.Enhanced, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 
 	// If no opts are set, then initialize
@@ -102,7 +104,7 @@ func (m *Meta) Backend(opts *BackendOpts) (backend.Enhanced, tfdiags.Diagnostics
 	var b backend.Backend
 	if !opts.ForceLocal {
 		var backendDiags tfdiags.Diagnostics
-		b, backendDiags = m.backendFromConfig(opts)
+		b, backendDiags = m.backendFromConfig(opts, enc)
 		diags = diags.Append(backendDiags)
 
 		if diags.HasErrors() {
@@ -179,7 +181,7 @@ func (m *Meta) Backend(opts *BackendOpts) (backend.Enhanced, tfdiags.Diagnostics
 	}
 
 	// Build the local backend
-	local := backendLocal.NewWithBackend(b)
+	local := backendLocal.NewWithBackend(b, enc)
 	if err := local.CLIInit(cliOpts); err != nil {
 		// Local backend isn't allowed to fail. It would be a bug.
 		panic(err)
@@ -215,9 +217,7 @@ func (m *Meta) Backend(opts *BackendOpts) (backend.Enhanced, tfdiags.Diagnostics
 // if the currently selected workspace is valid. If not, it will ask
 // the user to select a workspace from the list.
 func (m *Meta) selectWorkspace(b backend.Backend) error {
-	ctx := context.TODO()
-
-	workspaces, err := b.Workspaces(ctx)
+	workspaces, err := b.Workspaces()
 	if err == backend.ErrWorkspacesNotSupported {
 		return nil
 	}
@@ -229,7 +229,7 @@ func (m *Meta) selectWorkspace(b backend.Backend) error {
 			// len is always 1 if using Name; 0 means we're using Tags and there
 			// aren't any matching workspaces. Which might be normal and fine, so
 			// let's just ask:
-			name, err := m.UIInput().Input(ctx, &tofu.InputOpts{
+			name, err := m.UIInput().Input(context.Background(), &tofu.InputOpts{
 				Id:          "create-workspace",
 				Query:       "\n[reset][bold][yellow]No workspaces found.[reset]",
 				Description: fmt.Sprintf(inputCloudInitCreateWorkspace, strings.Join(c.WorkspaceMapping.Tags, ", ")),
@@ -276,7 +276,7 @@ func (m *Meta) selectWorkspace(b backend.Backend) error {
 	}
 
 	// Otherwise, ask the user to select a workspace from the list of existing workspaces.
-	v, err := m.UIInput().Input(ctx, &tofu.InputOpts{
+	v, err := m.UIInput().Input(context.Background(), &tofu.InputOpts{
 		Id: "select-workspace",
 		Query: fmt.Sprintf(
 			"\n[reset][bold][yellow]The currently selected workspace (%s) does not exist.[reset]",
@@ -304,7 +304,7 @@ func (m *Meta) selectWorkspace(b backend.Backend) error {
 // The current workspace name is also stored as part of the plan, and so this
 // method will check that it matches the currently-selected workspace name
 // and produce error diagnostics if not.
-func (m *Meta) BackendForLocalPlan(settings plans.Backend) (backend.Enhanced, tfdiags.Diagnostics) {
+func (m *Meta) BackendForLocalPlan(settings plans.Backend, enc encryption.StateEncryption) (backend.Enhanced, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 
 	f := backendInit.Backend(settings.Type)
@@ -312,25 +312,23 @@ func (m *Meta) BackendForLocalPlan(settings plans.Backend) (backend.Enhanced, tf
 		diags = diags.Append(fmt.Errorf(strings.TrimSpace(errBackendSavedUnknown), settings.Type))
 		return nil, diags
 	}
-	b := f()
+	b := f(enc)
 	log.Printf("[TRACE] Meta.BackendForLocalPlan: instantiated backend of type %T", b)
 
-	ctx := context.TODO()
-
-	schema := b.ConfigSchema(ctx)
+	schema := b.ConfigSchema()
 	configVal, err := settings.Config.Decode(schema.ImpliedType())
 	if err != nil {
 		diags = diags.Append(fmt.Errorf("saved backend configuration is invalid: %w", err))
 		return nil, diags
 	}
 
-	newVal, validateDiags := b.PrepareConfig(ctx, configVal)
+	newVal, validateDiags := b.PrepareConfig(configVal)
 	diags = diags.Append(validateDiags)
 	if validateDiags.HasErrors() {
 		return nil, diags
 	}
 
-	configureDiags := b.Configure(ctx, newVal)
+	configureDiags := b.Configure(newVal)
 	diags = diags.Append(configureDiags)
 	if configureDiags.HasErrors() {
 		return nil, diags
@@ -373,7 +371,7 @@ func (m *Meta) BackendForLocalPlan(settings plans.Backend) (backend.Enhanced, tf
 		return nil, diags
 	}
 	cliOpts.Validation = false // don't validate here in case config contains file(...) calls where the file doesn't exist
-	local := backendLocal.NewWithBackend(b)
+	local := backendLocal.NewWithBackend(b, enc)
 	if err := local.CLIInit(cliOpts); err != nil {
 		// Local backend should never fail, so this is always a bug.
 		panic(err)
@@ -407,10 +405,8 @@ func (m *Meta) backendCLIOpts() (*backend.CLIOpts, error) {
 // This prepares the operation. After calling this, the caller is expected
 // to modify fields of the operation such as Sequence to specify what will
 // be called.
-func (m *Meta) Operation(b backend.Backend, vt arguments.ViewType) *backend.Operation {
-	ctx := context.TODO()
-
-	schema := b.ConfigSchema(ctx)
+func (m *Meta) Operation(b backend.Backend, vt arguments.ViewType, enc encryption.Encryption) *backend.Operation {
+	schema := b.ConfigSchema()
 	workspace, err := m.Workspace()
 	if err != nil {
 		// An invalid workspace error would have been raised when creating the
@@ -439,13 +435,15 @@ func (m *Meta) Operation(b backend.Backend, vt arguments.ViewType) *backend.Oper
 		// should always have been called earlier to prepare the "ContextOpts"
 		// for the backend anyway, so we should never actually get here in
 		// a real situation. If we do get here then the backend will inevitably
-		// fail downstream somwhere if it tries to use the empty depLocks.
+		// fail downstream somewhere if it tries to use the empty depLocks.
 		log.Printf("[WARN] Failed to load dependency locks while preparing backend operation (ignored): %s", diags.Err().Error())
 	}
 
 	return &backend.Operation{
+		Encryption:      enc,
 		PlanOutBackend:  planOutBackend,
 		Targets:         m.targets,
+		Excludes:        m.excludes,
 		UIIn:            m.UIInput(),
 		UIOut:           m.Ui,
 		Workspace:       workspace,
@@ -497,13 +495,15 @@ func (m *Meta) backendConfig(opts *BackendOpts) (*configs.Backend, int, tfdiags.
 		})
 		return nil, 0, diags
 	}
-	b := bf()
+	b := bf(nil) // Just using this for config/schema, don't need encryption here
 
-	ctx := context.TODO()
-
-	configSchema := b.ConfigSchema(ctx)
+	configSchema := b.ConfigSchema()
 	configBody := c.Config
-	configHash := c.Hash(configSchema)
+	configHash, cfgDiags := c.Hash(configSchema)
+	diags = diags.Append(cfgDiags)
+	if diags.HasErrors() {
+		return nil, 0, diags
+	}
 
 	// If we have an override configuration body then we must apply it now.
 	if opts.ConfigOverride != nil {
@@ -532,7 +532,7 @@ func (m *Meta) backendConfig(opts *BackendOpts) (*configs.Backend, int, tfdiags.
 //
 // This function may query the user for input unless input is disabled, in
 // which case this function will error.
-func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, tfdiags.Diagnostics) {
+func (m *Meta) backendFromConfig(opts *BackendOpts, enc encryption.StateEncryption) (backend.Backend, tfdiags.Diagnostics) {
 	// Get the local backend configuration.
 	c, cHash, diags := m.backendConfig(opts)
 	if diags.HasErrors() {
@@ -631,7 +631,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, tfdiags.Di
 			return nil, diags
 		}
 
-		return m.backend_c_r_S(c, cHash, sMgr, true, opts)
+		return m.backend_c_r_S(c, cHash, sMgr, true, opts, enc)
 
 	// Configuring a backend for the first time or -reconfigure flag was used
 	case c != nil && s.Backend.Empty():
@@ -654,7 +654,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, tfdiags.Di
 			}
 			return nil, diags
 		}
-		return m.backend_C_r_s(c, cHash, sMgr, opts)
+		return m.backend_C_r_s(c, cHash, sMgr, opts, enc)
 	// Potentially changing a backend configuration
 	case c != nil && !s.Backend.Empty():
 		// We are not going to migrate if...
@@ -664,7 +664,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, tfdiags.Di
 		// AND we're not providing any overrides. An override can mean a change overriding an unchanged backend block (indicated by the hash value).
 		if (uint64(cHash) == s.Backend.Hash) && (!opts.Init || opts.ConfigOverride == nil) {
 			log.Printf("[TRACE] Meta.Backend: using already-initialized, unchanged %q backend configuration", c.Type)
-			savedBackend, diags := m.savedBackend(sMgr)
+			savedBackend, diags := m.savedBackend(sMgr, enc)
 			// Verify that selected workspace exist. Otherwise prompt user to create one
 			if opts.Init && savedBackend != nil {
 				if err := m.selectWorkspace(savedBackend); err != nil {
@@ -681,7 +681,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, tfdiags.Di
 		// don't need to migrate, we update the backend cache hash value.
 		if !m.backendConfigNeedsMigration(c, s.Backend) {
 			log.Printf("[TRACE] Meta.Backend: using already-initialized %q backend configuration", c.Type)
-			savedBackend, moreDiags := m.savedBackend(sMgr)
+			savedBackend, moreDiags := m.savedBackend(sMgr, enc)
 			diags = diags.Append(moreDiags)
 			if moreDiags.HasErrors() {
 				return nil, diags
@@ -721,7 +721,7 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, tfdiags.Di
 		}
 
 		log.Printf("[WARN] backend config has changed since last init")
-		return m.backend_C_r_S_changed(c, cHash, sMgr, true, opts)
+		return m.backend_C_r_S_changed(c, cHash, sMgr, true, opts, enc)
 
 	default:
 		diags = diags.Append(fmt.Errorf(
@@ -782,7 +782,7 @@ func (m *Meta) determineInitReason(previousBackendType string, currentBackendTyp
 // from the backend state. This should be used only when a user runs
 // `tofu init -backend=false`. This function returns a local backend if
 // there is no backend state or no backend configured.
-func (m *Meta) backendFromState(ctx context.Context) (backend.Backend, tfdiags.Diagnostics) {
+func (m *Meta) backendFromState(ctx context.Context, enc encryption.StateEncryption) (backend.Backend, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 	// Get the path to where we store a local cache of backend configuration
 	// if we're using a remote backend. This may not yet exist which means
@@ -797,30 +797,30 @@ func (m *Meta) backendFromState(ctx context.Context) (backend.Backend, tfdiags.D
 	if s == nil {
 		// no state, so return a local backend
 		log.Printf("[TRACE] Meta.Backend: backend has not previously been initialized in this working directory")
-		return backendLocal.New(), diags
+		return backendLocal.New(enc), diags
 	}
 	if s.Backend == nil {
 		// s.Backend is nil, so return a local backend
 		log.Printf("[TRACE] Meta.Backend: working directory was previously initialized but has no backend (is using legacy remote state?)")
-		return backendLocal.New(), diags
+		return backendLocal.New(enc), diags
 	}
 	log.Printf("[TRACE] Meta.Backend: working directory was previously initialized for %q backend", s.Backend.Type)
 
 	//backend init function
 	if s.Backend.Type == "" {
-		return backendLocal.New(), diags
+		return backendLocal.New(enc), diags
 	}
 	f := backendInit.Backend(s.Backend.Type)
 	if f == nil {
 		diags = diags.Append(fmt.Errorf(strings.TrimSpace(errBackendSavedUnknown), s.Backend.Type))
 		return nil, diags
 	}
-	b := f()
+	b := f(enc)
 
 	// The configuration saved in the working directory state file is used
 	// in this case, since it will contain any additional values that
 	// were provided via -backend-config arguments on tofu init.
-	schema := b.ConfigSchema(ctx)
+	schema := b.ConfigSchema()
 	configVal, err := s.Backend.Config(schema)
 	if err != nil {
 		diags = diags.Append(tfdiags.Sourceless(
@@ -832,13 +832,13 @@ func (m *Meta) backendFromState(ctx context.Context) (backend.Backend, tfdiags.D
 	}
 
 	// Validate the config and then configure the backend
-	newVal, validDiags := b.PrepareConfig(ctx, configVal)
+	newVal, validDiags := b.PrepareConfig(configVal)
 	diags = diags.Append(validDiags)
 	if validDiags.HasErrors() {
 		return nil, diags
 	}
 
-	configDiags := b.Configure(ctx, newVal)
+	configDiags := b.Configure(newVal)
 	diags = diags.Append(configDiags)
 	if configDiags.HasErrors() {
 		return nil, diags
@@ -877,7 +877,7 @@ func (m *Meta) backendFromState(ctx context.Context) (backend.Backend, tfdiags.D
 
 // Unconfiguring a backend (moving from backend => local).
 func (m *Meta) backend_c_r_S(
-	c *configs.Backend, cHash int, sMgr *clistate.LocalState, output bool, opts *BackendOpts) (backend.Backend, tfdiags.Diagnostics) {
+	c *configs.Backend, cHash int, sMgr *clistate.LocalState, output bool, opts *BackendOpts, enc encryption.StateEncryption) (backend.Backend, tfdiags.Diagnostics) {
 
 	var diags tfdiags.Diagnostics
 
@@ -906,14 +906,14 @@ func (m *Meta) backend_c_r_S(
 	}
 
 	// Grab a purely local backend to get the local state if it exists
-	localB, moreDiags := m.Backend(&BackendOpts{ForceLocal: true, Init: true})
+	localB, moreDiags := m.Backend(&BackendOpts{ForceLocal: true, Init: true}, enc)
 	diags = diags.Append(moreDiags)
 	if moreDiags.HasErrors() {
 		return nil, diags
 	}
 
 	// Initialize the configured backend
-	b, moreDiags := m.savedBackend(sMgr)
+	b, moreDiags := m.savedBackend(sMgr, enc)
 	diags = diags.Append(moreDiags)
 	if moreDiags.HasErrors() {
 		return nil, diags
@@ -954,7 +954,7 @@ func (m *Meta) backend_c_r_S(
 }
 
 // Configuring a backend for the first time.
-func (m *Meta) backend_C_r_s(c *configs.Backend, cHash int, sMgr *clistate.LocalState, opts *BackendOpts) (backend.Backend, tfdiags.Diagnostics) {
+func (m *Meta) backend_C_r_s(c *configs.Backend, cHash int, sMgr *clistate.LocalState, opts *BackendOpts, enc encryption.StateEncryption) (backend.Backend, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 
 	vt := arguments.ViewJSON
@@ -965,15 +965,13 @@ func (m *Meta) backend_C_r_s(c *configs.Backend, cHash int, sMgr *clistate.Local
 	}
 
 	// Grab a purely local backend to get the local state if it exists
-	localB, localBDiags := m.Backend(&BackendOpts{ForceLocal: true, Init: true})
+	localB, localBDiags := m.Backend(&BackendOpts{ForceLocal: true, Init: true}, enc)
 	if localBDiags.HasErrors() {
 		diags = diags.Append(localBDiags)
 		return nil, diags
 	}
 
-	ctx := context.TODO()
-
-	workspaces, err := localB.Workspaces(ctx)
+	workspaces, err := localB.Workspaces()
 	if err != nil {
 		diags = diags.Append(fmt.Errorf(errBackendLocalRead, err))
 		return nil, diags
@@ -981,12 +979,12 @@ func (m *Meta) backend_C_r_s(c *configs.Backend, cHash int, sMgr *clistate.Local
 
 	var localStates []statemgr.Full
 	for _, workspace := range workspaces {
-		localState, err := localB.StateMgr(ctx, workspace)
+		localState, err := localB.StateMgr(workspace)
 		if err != nil {
 			diags = diags.Append(fmt.Errorf(errBackendLocalRead, err))
 			return nil, diags
 		}
-		if err := localState.RefreshState(ctx); err != nil {
+		if err := localState.RefreshState(); err != nil {
 			diags = diags.Append(fmt.Errorf(errBackendLocalRead, err))
 			return nil, diags
 		}
@@ -1007,7 +1005,7 @@ func (m *Meta) backend_C_r_s(c *configs.Backend, cHash int, sMgr *clistate.Local
 	}
 
 	// Get the backend
-	b, configVal, moreDiags := m.backendInitFromConfig(c)
+	b, configVal, moreDiags := m.backendInitFromConfig(c, enc)
 	diags = diags.Append(moreDiags)
 	if diags.HasErrors() {
 		return nil, diags
@@ -1034,7 +1032,7 @@ func (m *Meta) backend_C_r_s(c *configs.Backend, cHash int, sMgr *clistate.Local
 		erase := true
 		if newLocalB, ok := b.(*backendLocal.Local); ok {
 			if localB, ok := localB.(*backendLocal.Local); ok {
-				if newLocalB.PathsConflictWith(ctx, localB) {
+				if newLocalB.PathsConflictWith(localB) {
 					erase = false
 					log.Printf("[TRACE] Meta.Backend: both old and new backends share the same local state paths, so not erasing old state")
 				}
@@ -1049,7 +1047,7 @@ func (m *Meta) backend_C_r_s(c *configs.Backend, cHash int, sMgr *clistate.Local
 					diags = diags.Append(fmt.Errorf(errBackendMigrateLocalDelete, err))
 					return nil, diags
 				}
-				if err := localState.PersistState(ctx, nil); err != nil {
+				if err := localState.PersistState(nil); err != nil {
 					diags = diags.Append(fmt.Errorf(errBackendMigrateLocalDelete, err))
 					return nil, diags
 				}
@@ -1067,7 +1065,7 @@ func (m *Meta) backend_C_r_s(c *configs.Backend, cHash int, sMgr *clistate.Local
 		defer stateLocker.Unlock()
 	}
 
-	configJSON, err := ctyjson.Marshal(configVal, b.ConfigSchema(ctx).ImpliedType())
+	configJSON, err := ctyjson.Marshal(configVal, b.ConfigSchema().ImpliedType())
 	if err != nil {
 		diags = diags.Append(fmt.Errorf("Can't serialize backend configuration as JSON: %w", err))
 		return nil, diags
@@ -1125,7 +1123,7 @@ func (m *Meta) backend_C_r_s(c *configs.Backend, cHash int, sMgr *clistate.Local
 }
 
 // Changing a previously saved backend.
-func (m *Meta) backend_C_r_S_changed(c *configs.Backend, cHash int, sMgr *clistate.LocalState, output bool, opts *BackendOpts) (backend.Backend, tfdiags.Diagnostics) {
+func (m *Meta) backend_C_r_S_changed(c *configs.Backend, cHash int, sMgr *clistate.LocalState, output bool, opts *BackendOpts, enc encryption.StateEncryption) (backend.Backend, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 
 	vt := arguments.ViewJSON
@@ -1168,7 +1166,7 @@ func (m *Meta) backend_C_r_S_changed(c *configs.Backend, cHash int, sMgr *clista
 	}
 
 	// Get the backend
-	b, configVal, moreDiags := m.backendInitFromConfig(c)
+	b, configVal, moreDiags := m.backendInitFromConfig(c, enc)
 	diags = diags.Append(moreDiags)
 	if moreDiags.HasErrors() {
 		return nil, diags
@@ -1182,7 +1180,7 @@ func (m *Meta) backend_C_r_S_changed(c *configs.Backend, cHash int, sMgr *clista
 	// state lives.
 	if cloudMode != cloud.ConfigChangeInPlace {
 		// Grab the existing backend
-		oldB, oldBDiags := m.savedBackend(sMgr)
+		oldB, oldBDiags := m.savedBackend(sMgr, enc)
 		diags = diags.Append(oldBDiags)
 		if oldBDiags.HasErrors() {
 			return nil, diags
@@ -1212,9 +1210,7 @@ func (m *Meta) backend_C_r_S_changed(c *configs.Backend, cHash int, sMgr *clista
 		}
 	}
 
-	ctx := context.TODO()
-
-	configJSON, err := ctyjson.Marshal(configVal, b.ConfigSchema(ctx).ImpliedType())
+	configJSON, err := ctyjson.Marshal(configVal, b.ConfigSchema().ImpliedType())
 	if err != nil {
 		diags = diags.Append(fmt.Errorf("Can't serialize backend configuration as JSON: %w", err))
 		return nil, diags
@@ -1265,7 +1261,7 @@ func (m *Meta) backend_C_r_S_changed(c *configs.Backend, cHash int, sMgr *clista
 // TODO: This is extremely similar to Meta.backendFromState() but for legacy reasons this is the
 // function used by the migration APIs within this file. The other handles 'init -backend=false',
 // specifically.
-func (m *Meta) savedBackend(sMgr *clistate.LocalState) (backend.Backend, tfdiags.Diagnostics) {
+func (m *Meta) savedBackend(sMgr *clistate.LocalState, enc encryption.StateEncryption) (backend.Backend, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 
 	s := sMgr.State()
@@ -1276,14 +1272,12 @@ func (m *Meta) savedBackend(sMgr *clistate.LocalState) (backend.Backend, tfdiags
 		diags = diags.Append(fmt.Errorf(strings.TrimSpace(errBackendSavedUnknown), s.Backend.Type))
 		return nil, diags
 	}
-	b := f()
-
-	ctx := context.TODO()
+	b := f(enc)
 
 	// The configuration saved in the working directory state file is used
 	// in this case, since it will contain any additional values that
 	// were provided via -backend-config arguments on tofu init.
-	schema := b.ConfigSchema(ctx)
+	schema := b.ConfigSchema()
 	configVal, err := s.Backend.Config(schema)
 	if err != nil {
 		diags = diags.Append(tfdiags.Sourceless(
@@ -1295,13 +1289,13 @@ func (m *Meta) savedBackend(sMgr *clistate.LocalState) (backend.Backend, tfdiags
 	}
 
 	// Validate the config and then configure the backend
-	newVal, validDiags := b.PrepareConfig(ctx, configVal)
+	newVal, validDiags := b.PrepareConfig(configVal)
 	diags = diags.Append(validDiags)
 	if validDiags.HasErrors() {
 		return nil, diags
 	}
 
-	configDiags := b.Configure(ctx, newVal)
+	configDiags := b.Configure(newVal)
 	diags = diags.Append(configDiags)
 	if configDiags.HasErrors() {
 		return nil, diags
@@ -1366,13 +1360,15 @@ func (m *Meta) backendConfigNeedsMigration(c *configs.Backend, s *legacy.Backend
 		log.Printf("[TRACE] backendConfigNeedsMigration: no backend of type %q, which migration codepath must handle", c.Type)
 		return true // let the migration codepath deal with the missing backend
 	}
-	b := f()
+	b := f(nil) // We don't need encryption here as it's only used for config/schema
 
-	ctx := context.TODO()
-
-	schema := b.ConfigSchema(ctx)
-	decSpec := schema.NoneRequired().DecoderSpec()
-	givenVal, diags := hcldec.Decode(c.Config, decSpec, nil)
+	// We use "NoneRequired" here because we're only evaluating the body written directly
+	// in the root module configuration, and we're intentionally not including any
+	// additional arguments passed on the command line (using -backend-config), so
+	// some of the required arguments might be satisfied from outside of the body we're
+	// evaluating here.
+	schema := b.ConfigSchema().NoneRequired()
+	givenVal, diags := c.Decode(schema)
 	if diags.HasErrors() {
 		log.Printf("[TRACE] backendConfigNeedsMigration: failed to decode given config; migration codepath must handle problem: %s", diags.Error())
 		return true // let the migration codepath deal with these errors
@@ -1396,7 +1392,7 @@ func (m *Meta) backendConfigNeedsMigration(c *configs.Backend, s *legacy.Backend
 	return true
 }
 
-func (m *Meta) backendInitFromConfig(c *configs.Backend) (backend.Backend, cty.Value, tfdiags.Diagnostics) {
+func (m *Meta) backendInitFromConfig(c *configs.Backend, enc encryption.StateEncryption) (backend.Backend, cty.Value, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 
 	// Get the backend
@@ -1405,13 +1401,10 @@ func (m *Meta) backendInitFromConfig(c *configs.Backend) (backend.Backend, cty.V
 		diags = diags.Append(fmt.Errorf(strings.TrimSpace(errBackendNewUnknown), c.Type))
 		return nil, cty.NilVal, diags
 	}
-	b := f()
+	b := f(enc)
 
-	ctx := context.TODO()
-
-	schema := b.ConfigSchema(ctx)
-	decSpec := schema.NoneRequired().DecoderSpec()
-	configVal, hclDiags := hcldec.Decode(c.Config, decSpec, nil)
+	schema := b.ConfigSchema()
+	configVal, hclDiags := c.Decode(schema.NoneRequired())
 	diags = diags.Append(hclDiags)
 	if hclDiags.HasErrors() {
 		return nil, cty.NilVal, diags
@@ -1441,13 +1434,13 @@ func (m *Meta) backendInitFromConfig(c *configs.Backend) (backend.Backend, cty.V
 		}
 	}
 
-	newVal, validateDiags := b.PrepareConfig(ctx, configVal)
+	newVal, validateDiags := b.PrepareConfig(configVal)
 	diags = diags.Append(validateDiags.InConfigBody(c.Config, ""))
 	if validateDiags.HasErrors() {
 		return nil, cty.NilVal, diags
 	}
 
-	configureDiags := b.Configure(ctx, newVal)
+	configureDiags := b.Configure(newVal)
 	diags = diags.Append(configureDiags.InConfigBody(c.Config, ""))
 
 	// If the result of loading the backend is an enhanced backend,

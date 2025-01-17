@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package arguments
@@ -19,6 +21,11 @@ type Output struct {
 
 	// ViewType specifies which output format to use: human, JSON, or "raw".
 	ViewType ViewType
+
+	Vars *Vars
+
+	// ShowSensitive is used to display the value of variables marked as sensitive.
+	ShowSensitive bool
 }
 
 // ParseOutput processes CLI arguments, returning an Output value and errors.
@@ -26,14 +33,17 @@ type Output struct {
 // the best effort interpretation of the arguments.
 func ParseOutput(args []string) (*Output, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
-	output := &Output{}
+	output := &Output{
+		Vars: &Vars{},
+	}
 
 	var jsonOutput, rawOutput bool
 	var statePath string
-	cmdFlags := defaultFlagSet("output")
+	cmdFlags := extendedFlagSet("output", nil, nil, output.Vars)
 	cmdFlags.BoolVar(&jsonOutput, "json", false, "json")
 	cmdFlags.BoolVar(&rawOutput, "raw", false, "raw")
 	cmdFlags.StringVar(&statePath, "state", "", "path")
+	cmdFlags.BoolVar(&output.ShowSensitive, "show-sensitive", false, "displays sensitive values")
 
 	if err := cmdFlags.Parse(args); err != nil {
 		diags = diags.Append(tfdiags.Sourceless(

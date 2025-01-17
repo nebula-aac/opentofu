@@ -1,11 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package cliconfig
 
 import (
 	"net/http"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -89,12 +90,9 @@ func TestCredentialsForHost(t *testing.T) {
 	})
 	t.Run("set in environment", func(t *testing.T) {
 		envName := "TF_TOKEN_configured_example_com"
-		t.Cleanup(func() {
-			os.Unsetenv(envName)
-		})
 
 		expectedToken := "configured-by-env"
-		os.Setenv(envName, expectedToken)
+		t.Setenv(envName, expectedToken)
 
 		creds, err := credSrc.ForHost(svchost.Hostname("configured.example.com"))
 		if err != nil {
@@ -112,12 +110,9 @@ func TestCredentialsForHost(t *testing.T) {
 
 	t.Run("punycode name set in environment", func(t *testing.T) {
 		envName := "TF_TOKEN_env_xn--eckwd4c7cu47r2wf_com"
-		t.Cleanup(func() {
-			os.Unsetenv(envName)
-		})
 
 		expectedToken := "configured-by-env"
-		os.Setenv(envName, expectedToken)
+		t.Setenv(envName, expectedToken)
 
 		hostname, _ := svchost.ForComparison("env.ドメイン名例.com")
 		creds, err := credSrc.ForHost(hostname)
@@ -138,11 +133,8 @@ func TestCredentialsForHost(t *testing.T) {
 	t.Run("hyphens can be encoded as double underscores", func(t *testing.T) {
 		envName := "TF_TOKEN_env_xn____caf__dma_fr"
 		expectedToken := "configured-by-fallback"
-		t.Cleanup(func() {
-			os.Unsetenv(envName)
-		})
 
-		os.Setenv(envName, expectedToken)
+		t.Setenv(envName, expectedToken)
 
 		hostname, _ := svchost.ForComparison("env.café.fr")
 		creds, err := credSrc.ForHost(hostname)
@@ -163,11 +155,8 @@ func TestCredentialsForHost(t *testing.T) {
 	t.Run("periods are ok", func(t *testing.T) {
 		envName := "TF_TOKEN_configured.example.com"
 		expectedToken := "configured-by-env"
-		t.Cleanup(func() {
-			os.Unsetenv(envName)
-		})
 
-		os.Setenv(envName, expectedToken)
+		t.Setenv(envName, expectedToken)
 
 		hostname, _ := svchost.ForComparison("configured.example.com")
 		creds, err := credSrc.ForHost(hostname)
@@ -189,10 +178,7 @@ func TestCredentialsForHost(t *testing.T) {
 		envName := "TF_TOKEN_CONFIGUREDUPPERCASE_EXAMPLE_COM"
 		expectedToken := "configured-by-env"
 
-		os.Setenv(envName, expectedToken)
-		t.Cleanup(func() {
-			os.Unsetenv(envName)
-		})
+		t.Setenv(envName, expectedToken)
 
 		hostname, _ := svchost.ForComparison("configureduppercase.example.com")
 		creds, err := credSrc.ForHost(hostname)

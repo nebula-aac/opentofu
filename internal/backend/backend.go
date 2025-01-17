@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 // Package backend provides interfaces that the CLI uses to interact with
@@ -22,6 +24,7 @@ import (
 	"github.com/opentofu/opentofu/internal/configs/configload"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
 	"github.com/opentofu/opentofu/internal/depsfile"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/plans"
 	"github.com/opentofu/opentofu/internal/plans/planfile"
 	"github.com/opentofu/opentofu/internal/states"
@@ -52,7 +55,7 @@ var (
 )
 
 // InitFn is used to initialize a new backend.
-type InitFn func() Backend
+type InitFn func(encryption.StateEncryption) Backend
 
 // Backend is the minimal interface that must be implemented to enable OpenTofu.
 type Backend interface {
@@ -61,7 +64,7 @@ type Backend interface {
 	//
 	// This method does not have any side-effects for the backend and can
 	// be safely used before configuring.
-	ConfigSchema(context.Context) *configschema.Block
+	ConfigSchema() *configschema.Block
 
 	// PrepareConfig checks the validity of the values in the given
 	// configuration, and inserts any missing defaults, assuming that its
@@ -81,7 +84,7 @@ type Backend interface {
 	// as tfdiags.AttributeValue, and so the caller should provide the
 	// necessary context via the diags.InConfigBody method before returning
 	// diagnostics to the user.
-	PrepareConfig(context.Context, cty.Value) (cty.Value, tfdiags.Diagnostics)
+	PrepareConfig(cty.Value) (cty.Value, tfdiags.Diagnostics)
 
 	// Configure uses the provided configuration to set configuration fields
 	// within the backend.
@@ -95,7 +98,7 @@ type Backend interface {
 	//
 	// If error diagnostics are returned, the internal state of the instance
 	// is undefined and no other methods may be called.
-	Configure(context.Context, cty.Value) tfdiags.Diagnostics
+	Configure(cty.Value) tfdiags.Diagnostics
 
 	// StateMgr returns the state manager for the given workspace name.
 	//
@@ -105,18 +108,18 @@ type Backend interface {
 	// If the named workspace doesn't exist, or if it has no state, it will
 	// be created either immediately on this call or the first time
 	// PersistState is called, depending on the state manager implementation.
-	StateMgr(_ context.Context, workspace string) (statemgr.Full, error)
+	StateMgr(workspace string) (statemgr.Full, error)
 
 	// DeleteWorkspace removes the workspace with the given name if it exists.
 	//
 	// DeleteWorkspace cannot prevent deleting a state that is in use. It is
 	// the responsibility of the caller to hold a Lock for the state manager
 	// belonging to this workspace before calling this method.
-	DeleteWorkspace(_ context.Context, name string, force bool) error
+	DeleteWorkspace(name string, force bool) error
 
 	// States returns a list of the names of all of the workspaces that exist
 	// in this backend.
-	Workspaces(context.Context) ([]string, error)
+	Workspaces() ([]string, error)
 }
 
 // HostAlias describes a list of aliases that should be used when initializing an
@@ -166,7 +169,7 @@ type Local interface {
 	// backend's implementations of this to understand what this actually
 	// does, because this operation has no well-defined contract aside from
 	// "whatever it already does".
-	LocalRun(*Operation) (*LocalRun, statemgr.Full, tfdiags.Diagnostics)
+	LocalRun(context.Context, *Operation) (*LocalRun, statemgr.Full, tfdiags.Diagnostics)
 }
 
 // LocalRun represents the assortment of objects that we can collect or
@@ -235,6 +238,9 @@ type Operation struct {
 	// Type is the operation to perform.
 	Type OperationType
 
+	// Encryption is used by enhanced backends for planning and tofu.Context initialization
+	Encryption encryption.Encryption
+
 	// PlanId is an opaque value that backends can use to execute a specific
 	// plan for an apply operation.
 	//
@@ -276,8 +282,11 @@ type Operation struct {
 	PlanMode     plans.Mode
 	AutoApprove  bool
 	Targets      []addrs.Targetable
+	Excludes     []addrs.Targetable
 	ForceReplace []addrs.AbsResourceInstance
-	Variables    map[string]UnparsedVariableValue
+	// Injected by the command creating the operation (plan/apply/refresh/etc...)
+	Variables map[string]UnparsedVariableValue
+	RootCall  configs.StaticModuleCall
 
 	// Some operations use root module variables only opportunistically or
 	// don't need them at all. If this flag is set, the backend must treat
@@ -318,15 +327,6 @@ type Operation struct {
 // file.
 func (o *Operation) HasConfig() bool {
 	return o.ConfigLoader.IsConfigDir(o.ConfigDir)
-}
-
-// Config loads the configuration that the operation applies to, using the
-// ConfigDir and ConfigLoader fields within the receiving operation.
-func (o *Operation) Config() (*configs.Config, tfdiags.Diagnostics) {
-	var diags tfdiags.Diagnostics
-	config, hclDiags := o.ConfigLoader.LoadConfig(o.ConfigDir)
-	diags = diags.Append(hclDiags)
-	return config, diags
 }
 
 // ReportResult is a helper for the common chore of setting the status of
@@ -413,7 +413,7 @@ func (r OperationResult) ExitStatus() int {
 	return int(r)
 }
 
-// If the argument is a path, Read loads it and returns the contents,
+// If the argument is a path, ReadPathOrContents loads it and returns the contents,
 // otherwise the argument is assumed to be the desired contents and is simply
 // returned.
 func ReadPathOrContents(poc string) (string, error) {

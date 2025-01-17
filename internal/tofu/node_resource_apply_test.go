@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -51,10 +53,10 @@ func TestNodeExpandApplyableResourceExecute(t *testing.T) {
 					Type: "test_instance",
 					Name: "foo",
 				},
-				ResolvedProvider: addrs.AbsProviderConfig{
+				ResolvedProvider: ResolvedProvider{ProviderConfig: addrs.AbsProviderConfig{
 					Provider: addrs.NewDefaultProvider("test"),
 					Module:   addrs.RootModule,
-				},
+				}},
 			},
 		}
 		diags := node.Execute(ctx, walkApply)

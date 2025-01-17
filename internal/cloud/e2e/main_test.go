@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package main
@@ -9,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,7 +21,7 @@ import (
 	tfversion "github.com/opentofu/opentofu/version"
 )
 
-var terraformBin string
+var tofuBin string
 var cliConfigFileEnv string
 
 var tfeClient *tfe.Client
@@ -91,7 +94,7 @@ func testRunner(t *testing.T, cases testCases, orgCount int, tfEnvFlags ...strin
 
 			tmpDir := t.TempDir()
 
-			tf := e2e.NewBinary(t, terraformBin, tmpDir)
+			tf := e2e.NewBinary(t, tofuBin, tmpDir)
 			tfEnvFlags = append(tfEnvFlags, "TF_LOG=INFO")
 			tfEnvFlags = append(tfEnvFlags, cliConfigFileEnv)
 			for _, env := range tfEnvFlags {
@@ -195,7 +198,8 @@ func setupBinary() func() {
 		os.Exit(1)
 	}
 	// Getting top level dir
-	dirPaths := strings.Split(currentDir, "/")
+	newDir := filepath.ToSlash(currentDir)
+	dirPaths := strings.Split(newDir, "/")
 	log.Println(currentDir)
 	topLevel := len(dirPaths) - 3
 	topDir := strings.Join(dirPaths[0:topLevel], "/")
@@ -221,7 +225,7 @@ func setupBinary() func() {
 	credFile := fmt.Sprintf("%s/dev.tfrc", tmpTerraformBinaryDir)
 	writeCredRC(credFile)
 
-	terraformBin = fmt.Sprintf("%s/terraform", tmpTerraformBinaryDir)
+	tofuBin = fmt.Sprintf("%s/terraform", tmpTerraformBinaryDir)
 	cliConfigFileEnv = fmt.Sprintf("TF_CLI_CONFIG_FILE=%s", credFile)
 
 	return func() {

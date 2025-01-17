@@ -1,3 +1,8 @@
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package tofu
 
 import (
@@ -6,6 +11,7 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hcltest"
+	"github.com/opentofu/opentofu/internal/lang"
 	"github.com/opentofu/opentofu/internal/lang/marks"
 	"github.com/zclconf/go-cty/cty"
 )
@@ -13,6 +19,7 @@ import (
 func TestEvaluateImportIdExpression_SensitiveValue(t *testing.T) {
 	ctx := &MockEvalContext{}
 	ctx.installSimpleEval()
+	ctx.EvaluationScopeScope = &lang.Scope{}
 
 	testCases := []struct {
 		name    string
@@ -48,7 +55,7 @@ func TestEvaluateImportIdExpression_SensitiveValue(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, diags := evaluateImportIdExpression(tc.expr, ctx)
+			_, diags := evaluateImportIdExpression(tc.expr, ctx, EvalDataForNoInstanceKey)
 
 			if tc.wantErr != "" {
 				if len(diags) != 1 {

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package getproviders
@@ -35,7 +37,7 @@ import (
 //
 // In practice today this function only knows how to suggest alternatives for
 // "default" providers, which is to say ones that are in the hashicorp
-// namespace in the Terraform registry. It will always return no result for
+// namespace in the OpenTofu registry. It will always return no result for
 // any other provider. That might change in future if we introduce other ways
 // to discover provider suggestions.
 //

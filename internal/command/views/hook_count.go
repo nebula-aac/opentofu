@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package views
@@ -27,9 +29,9 @@ type countHook struct {
 	ToRemove       int
 	ToRemoveAndAdd int
 
+	sync.Mutex
 	pending map[string]plans.Action
 
-	sync.Mutex
 	tofu.NilHook
 }
 

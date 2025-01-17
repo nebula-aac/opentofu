@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package json
@@ -76,7 +78,7 @@ type DiagnosticSnippet struct {
 	// the resource block in which an expression causes an error.
 	Context *string `json:"context"`
 
-	// Code is a possibly-multi-line string of Terraform configuration, which
+	// Code is a possibly-multi-line string of OpenTofu configuration, which
 	// includes both the diagnostic source and any relevant context as defined
 	// by the diagnostic.
 	Code string `json:"code"`
@@ -131,7 +133,7 @@ type DiagnosticFunctionCall struct {
 
 // NewDiagnostic takes a tfdiags.Diagnostic and a map of configuration sources,
 // and returns a Diagnostic struct.
-func NewDiagnostic(diag tfdiags.Diagnostic, sources map[string][]byte) *Diagnostic {
+func NewDiagnostic(diag tfdiags.Diagnostic, sources map[string]*hcl.File) *Diagnostic {
 	var sev string
 	switch diag.Severity() {
 	case tfdiags.Error:
@@ -198,7 +200,9 @@ func NewDiagnostic(diag tfdiags.Diagnostic, sources map[string][]byte) *Diagnost
 
 		var src []byte
 		if sources != nil {
-			src = sources[highlightRange.Filename]
+			if f, ok := sources[highlightRange.Filename]; ok {
+				src = f.Bytes
+			}
 		}
 
 		// If we have a source file for the diagnostic, we can emit a code

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package configs
@@ -28,8 +30,11 @@ func decodeProviderMetaBlock(block *hcl.Block) (*ProviderMeta, hcl.Diagnostics) 
 		diags = append(diags, d...)
 	}
 
-	// verify that the local name is already localized or produce an error.
-	diags = append(diags, checkProviderNameNormalized(block.Labels[0], block.DefRange)...)
+	// If the name is invalid, we return an error early, lest the invalid value
+	// is used by the caller and causes a panic further down the line.
+	if diags = append(diags, checkProviderNameNormalized(block.Labels[0], block.DefRange)...); diags.HasErrors() {
+		return nil, diags
+	}
 
 	return &ProviderMeta{
 		Provider:      block.Labels[0],

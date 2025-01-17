@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package s3
@@ -7,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"reflect"
@@ -15,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	dtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -22,14 +26,18 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/hashicorp/aws-sdk-go-base/v2/mockdata"
 	"github.com/hashicorp/aws-sdk-go-base/v2/servicemocks"
+	"github.com/zclconf/go-cty/cty"
+
 	"github.com/opentofu/opentofu/internal/backend"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
 	"github.com/opentofu/opentofu/internal/configs/hcl2shim"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/states"
 	"github.com/opentofu/opentofu/internal/states/remote"
 	"github.com/opentofu/opentofu/internal/tfdiags"
-	"github.com/zclconf/go-cty/cty"
 )
+
+const testBucketPrefix = "tofu-test"
 
 var (
 	mockStsGetCallerIdentityRequestBody = url.Values{
@@ -40,14 +48,13 @@ var (
 
 // verify that we are doing ACC tests or the S3 tests specifically
 func testACC(t *testing.T) {
+	t.Helper()
 	skip := os.Getenv("TF_ACC") == "" && os.Getenv("TF_S3_TEST") == ""
 	if skip {
 		t.Log("s3 backend tests require setting TF_ACC or TF_S3_TEST")
 		t.Skip()
 	}
-	if os.Getenv("AWS_DEFAULT_REGION") == "" {
-		os.Setenv("AWS_DEFAULT_REGION", "us-west-2")
-	}
+	t.Setenv("AWS_DEFAULT_REGION", "us-west-2")
 }
 
 func TestBackend_impl(t *testing.T) {
@@ -58,13 +65,13 @@ func TestBackendConfig_original(t *testing.T) {
 	testACC(t)
 	config := map[string]interface{}{
 		"region":         "us-west-1",
-		"bucket":         "tf-test",
+		"bucket":         testBucketPrefix,
 		"key":            "state",
 		"encrypt":        true,
 		"dynamodb_table": "dynamoTable",
 	}
 
-	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(config)).(*Backend)
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(config)).(*Backend)
 
 	if b.awsConfig.Region != "us-west-1" {
 		t.Fatalf("Incorrect region was populated")
@@ -72,7 +79,7 @@ func TestBackendConfig_original(t *testing.T) {
 	if b.awsConfig.RetryMaxAttempts != 5 {
 		t.Fatalf("Default max_retries was not set")
 	}
-	if b.bucketName != "tf-test" {
+	if b.bucketName != testBucketPrefix {
 		t.Fatalf("Incorrect bucketName was populated")
 	}
 	if b.keyName != "state" {
@@ -101,7 +108,7 @@ func TestBackendConfig_InvalidRegion(t *testing.T) {
 		"with region validation": {
 			config: map[string]interface{}{
 				"region":                      "nonesuch",
-				"bucket":                      "tf-test",
+				"bucket":                      testBucketPrefix,
 				"key":                         "state",
 				"skip_credentials_validation": true,
 			},
@@ -117,7 +124,7 @@ func TestBackendConfig_InvalidRegion(t *testing.T) {
 		"skip region validation": {
 			config: map[string]interface{}{
 				"region":                      "nonesuch",
-				"bucket":                      "tf-test",
+				"bucket":                      testBucketPrefix,
 				"key":                         "state",
 				"skip_region_validation":      true,
 				"skip_credentials_validation": true,
@@ -127,18 +134,16 @@ func TestBackendConfig_InvalidRegion(t *testing.T) {
 	}
 
 	for name, tc := range cases {
-		ctx := context.Background()
-
 		t.Run(name, func(t *testing.T) {
-			b := New()
-			configSchema := populateSchema(t, b.ConfigSchema(ctx), hcl2shim.HCL2ValueFromConfigValue(tc.config))
+			b := New(encryption.StateEncryptionDisabled())
+			configSchema := populateSchema(t, b.ConfigSchema(), hcl2shim.HCL2ValueFromConfigValue(tc.config))
 
-			configSchema, diags := b.PrepareConfig(ctx, configSchema)
+			configSchema, diags := b.PrepareConfig(configSchema)
 			if len(diags) > 0 {
 				t.Fatal(diags.ErrWithWarnings())
 			}
 
-			confDiags := b.Configure(ctx, configSchema)
+			confDiags := b.Configure(configSchema)
 			diags = diags.Append(confDiags)
 
 			if diff := cmp.Diff(diags, tc.expectedDiags, cmp.Comparer(diagnosticComparer)); diff != "" {
@@ -151,7 +156,7 @@ func TestBackendConfig_InvalidRegion(t *testing.T) {
 func TestBackendConfig_RegionEnvVar(t *testing.T) {
 	testACC(t)
 	config := map[string]interface{}{
-		"bucket": "tf-test",
+		"bucket": testBucketPrefix,
 		"key":    "state",
 	}
 
@@ -174,15 +179,10 @@ func TestBackendConfig_RegionEnvVar(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			for k, v := range tc.vars {
-				os.Setenv(k, v)
+				t.Setenv(k, v)
 			}
-			t.Cleanup(func() {
-				for k := range tc.vars {
-					os.Unsetenv(k)
-				}
-			})
 
-			b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(config)).(*Backend)
+			b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(config)).(*Backend)
 
 			if b.awsConfig.Region != "us-west-1" {
 				t.Fatalf("Incorrect region was populated")
@@ -220,19 +220,14 @@ func TestBackendConfig_DynamoDBEndpoint(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			config := map[string]interface{}{
 				"region": "us-west-1",
-				"bucket": "tf-test",
+				"bucket": testBucketPrefix,
 				"key":    "state",
 			}
 
 			if tc.vars != nil {
 				for k, v := range tc.vars {
-					os.Setenv(k, v)
+					t.Setenv(k, v)
 				}
-				t.Cleanup(func() {
-					for k := range tc.vars {
-						os.Unsetenv(k)
-					}
-				})
 			}
 
 			if tc.config != nil {
@@ -241,7 +236,7 @@ func TestBackendConfig_DynamoDBEndpoint(t *testing.T) {
 				}
 			}
 
-			backend.TestBackendConfig(t, New(), backend.TestWrapConfig(config))
+			backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(config))
 		})
 	}
 }
@@ -275,19 +270,14 @@ func TestBackendConfig_S3Endpoint(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			config := map[string]interface{}{
 				"region": "us-west-1",
-				"bucket": "tf-test",
+				"bucket": testBucketPrefix,
 				"key":    "state",
 			}
 
 			if tc.vars != nil {
 				for k, v := range tc.vars {
-					os.Setenv(k, v)
+					t.Setenv(k, v)
 				}
-				t.Cleanup(func() {
-					for k := range tc.vars {
-						os.Unsetenv(k)
-					}
-				})
 			}
 
 			if tc.config != nil {
@@ -296,7 +286,7 @@ func TestBackendConfig_S3Endpoint(t *testing.T) {
 				}
 			}
 
-			backend.TestBackendConfig(t, New(), backend.TestWrapConfig(config))
+			backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(config))
 		})
 	}
 }
@@ -346,38 +336,35 @@ func TestBackendConfig_STSEndpoint(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			config := map[string]interface{}{
-				"region":       "us-west-1",
-				"bucket":       "tf-test",
-				"key":          "state",
-				"role_arn":     servicemocks.MockStsAssumeRoleArn,
-				"session_name": servicemocks.MockStsAssumeRoleSessionName,
+				"region": "us-west-1",
+				"bucket": testBucketPrefix,
+				"key":    "state",
+				"assume_role": map[string]interface{}{
+					"role_arn":     servicemocks.MockStsAssumeRoleArn,
+					"session_name": servicemocks.MockStsAssumeRoleSessionName,
+				},
 			}
 
 			closeSts, _, endpoint := mockdata.GetMockedAwsApiSession("STS", stsMocks)
 			defer closeSts()
 
 			if tc.setEnvVars {
-				os.Setenv("AWS_STS_ENDPOINT", endpoint)
-				t.Cleanup(func() {
-					os.Unsetenv("AWS_STS_ENDPOINT")
-				})
+				t.Setenv("AWS_STS_ENDPOINT", endpoint)
 			}
 
 			if tc.setConfig {
 				config["sts_endpoint"] = endpoint
 			}
 
-			ctx := context.Background()
+			b := New(encryption.StateEncryptionDisabled())
+			configSchema := populateSchema(t, b.ConfigSchema(), hcl2shim.HCL2ValueFromConfigValue(config))
 
-			b := New()
-			configSchema := populateSchema(t, b.ConfigSchema(ctx), hcl2shim.HCL2ValueFromConfigValue(config))
-
-			configSchema, diags := b.PrepareConfig(ctx, configSchema)
+			configSchema, diags := b.PrepareConfig(configSchema)
 			if len(diags) > 0 {
 				t.Fatal(diags.ErrWithWarnings())
 			}
 
-			confDiags := b.Configure(ctx, configSchema)
+			confDiags := b.Configure(configSchema)
 			diags = diags.Append(confDiags)
 
 			if diff := cmp.Diff(diags, tc.expectedDiags, cmp.Comparer(diagnosticSummaryComparer)); diff != "" {
@@ -397,7 +384,7 @@ func TestBackendConfig_AssumeRole(t *testing.T) {
 	}{
 		{
 			Config: map[string]interface{}{
-				"bucket":       "tf-test",
+				"bucket":       testBucketPrefix,
 				"key":          "state",
 				"region":       "us-west-1",
 				"role_arn":     servicemocks.MockStsAssumeRoleArn,
@@ -424,7 +411,7 @@ func TestBackendConfig_AssumeRole(t *testing.T) {
 		{
 			Config: map[string]interface{}{
 				"assume_role_duration_seconds": 3600,
-				"bucket":                       "tf-test",
+				"bucket":                       testBucketPrefix,
 				"key":                          "state",
 				"region":                       "us-west-1",
 				"role_arn":                     servicemocks.MockStsAssumeRoleArn,
@@ -450,7 +437,7 @@ func TestBackendConfig_AssumeRole(t *testing.T) {
 		},
 		{
 			Config: map[string]interface{}{
-				"bucket":       "tf-test",
+				"bucket":       testBucketPrefix,
 				"external_id":  servicemocks.MockStsAssumeRoleExternalId,
 				"key":          "state",
 				"region":       "us-west-1",
@@ -479,7 +466,7 @@ func TestBackendConfig_AssumeRole(t *testing.T) {
 		{
 			Config: map[string]interface{}{
 				"assume_role_policy": servicemocks.MockStsAssumeRolePolicy,
-				"bucket":             "tf-test",
+				"bucket":             "tofu-test",
 				"key":                "state",
 				"region":             "us-west-1",
 				"role_arn":           servicemocks.MockStsAssumeRoleArn,
@@ -507,7 +494,7 @@ func TestBackendConfig_AssumeRole(t *testing.T) {
 		{
 			Config: map[string]interface{}{
 				"assume_role_policy_arns": []interface{}{servicemocks.MockStsAssumeRolePolicyArn},
-				"bucket":                  "tf-test",
+				"bucket":                  "tofu-test",
 				"key":                     "state",
 				"region":                  "us-west-1",
 				"role_arn":                servicemocks.MockStsAssumeRoleArn,
@@ -537,7 +524,7 @@ func TestBackendConfig_AssumeRole(t *testing.T) {
 				"assume_role_tags": map[string]interface{}{
 					servicemocks.MockStsAssumeRoleTagKey: servicemocks.MockStsAssumeRoleTagValue,
 				},
-				"bucket":       "tf-test",
+				"bucket":       "tofu-test",
 				"key":          "state",
 				"region":       "us-west-1",
 				"role_arn":     servicemocks.MockStsAssumeRoleArn,
@@ -569,7 +556,7 @@ func TestBackendConfig_AssumeRole(t *testing.T) {
 					servicemocks.MockStsAssumeRoleTagKey: servicemocks.MockStsAssumeRoleTagValue,
 				},
 				"assume_role_transitive_tag_keys": []interface{}{servicemocks.MockStsAssumeRoleTagKey},
-				"bucket":                          "tf-test",
+				"bucket":                          "tofu-test",
 				"key":                             "state",
 				"region":                          "us-west-1",
 				"role_arn":                        servicemocks.MockStsAssumeRoleArn,
@@ -602,15 +589,13 @@ func TestBackendConfig_AssumeRole(t *testing.T) {
 		testCase := testCase
 
 		t.Run(testCase.Description, func(t *testing.T) {
-			ctx := context.Background()
-
 			closeSts, _, endpoint := mockdata.GetMockedAwsApiSession("STS", testCase.MockStsEndpoints)
 			defer closeSts()
 
 			testCase.Config["sts_endpoint"] = endpoint
 
-			b := New()
-			diags := b.Configure(ctx, populateSchema(t, b.ConfigSchema(ctx), hcl2shim.HCL2ValueFromConfigValue(testCase.Config)))
+			b := New(encryption.StateEncryptionDisabled())
+			diags := b.Configure(populateSchema(t, b.ConfigSchema(), hcl2shim.HCL2ValueFromConfigValue(testCase.Config)))
 
 			if diags.HasErrors() {
 				for _, diag := range diags {
@@ -708,7 +693,7 @@ func TestBackendConfig_PrepareConfigValidation(t *testing.T) {
 			}),
 			expectedErr: `The "workspace_key_prefix" attribute value must not start with "/".`,
 		},
-		"encyrption key conflict": {
+		"encryption key conflict": {
 			config: cty.ObjectVal(map[string]cty.Value{
 				"bucket":               cty.StringVal("test"),
 				"key":                  cty.StringVal("test"),
@@ -790,14 +775,11 @@ func TestBackendConfig_PrepareConfigValidation(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			oldEnv := servicemocks.StashEnv()
-			defer servicemocks.PopEnv(oldEnv)
+			servicemocks.StashEnv(t)
 
-			b := New()
+			b := New(encryption.StateEncryptionDisabled())
 
-			ctx := context.Background()
-
-			_, valDiags := b.PrepareConfig(ctx, populateSchema(t, b.ConfigSchema(ctx), tc.config))
+			_, valDiags := b.PrepareConfig(populateSchema(t, b.ConfigSchema(), tc.config))
 			if tc.expectedErr != "" {
 				if valDiags.Err() != nil {
 					actualErr := valDiags.Err().Error()
@@ -832,14 +814,11 @@ func TestBackendConfig_PrepareConfigValidationWarnings(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			oldEnv := servicemocks.StashEnv()
-			defer servicemocks.PopEnv(oldEnv)
+			servicemocks.StashEnv(t)
 
-			b := New()
+			b := New(encryption.StateEncryptionDisabled())
 
-			ctx := context.Background()
-
-			_, diags := b.PrepareConfig(ctx, populateSchema(t, b.ConfigSchema(ctx), tc.config))
+			_, diags := b.PrepareConfig(populateSchema(t, b.ConfigSchema(), tc.config))
 			if tc.expectedWarn != "" {
 				if err := diags.ErrWithWarnings(); err != nil {
 					if !strings.Contains(err.Error(), tc.expectedWarn) {
@@ -881,7 +860,7 @@ func TestBackendConfig_PrepareConfigWithEnvVars(t *testing.T) {
 				"AWS_DEFAULT_REGION": "us-west-1",
 			},
 		},
-		"encyrption key conflict": {
+		"encryption key conflict": {
 			config: cty.ObjectVal(map[string]cty.Value{
 				"bucket":               cty.StringVal("test"),
 				"key":                  cty.StringVal("test"),
@@ -898,18 +877,15 @@ func TestBackendConfig_PrepareConfigWithEnvVars(t *testing.T) {
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			oldEnv := servicemocks.StashEnv()
-			defer servicemocks.PopEnv(oldEnv)
+			servicemocks.StashEnv(t)
 
-			b := New()
+			b := New(encryption.StateEncryptionDisabled())
 
 			for k, v := range tc.vars {
-				os.Setenv(k, v)
+				t.Setenv(k, v)
 			}
 
-			ctx := context.Background()
-
-			_, valDiags := b.PrepareConfig(ctx, populateSchema(t, b.ConfigSchema(ctx), tc.config))
+			_, valDiags := b.PrepareConfig(populateSchema(t, b.ConfigSchema(), tc.config))
 			if tc.expectedErr != "" {
 				if valDiags.Err() != nil {
 					actualErr := valDiags.Err().Error()
@@ -926,13 +902,183 @@ func TestBackendConfig_PrepareConfigWithEnvVars(t *testing.T) {
 	}
 }
 
+// TestBackendConfig_proxy tests proxy configuration
+func TestBackendConfig_proxy(t *testing.T) {
+	testACC(t)
+
+	newURL := func(rawURL string) *url.URL {
+		o, err := url.Parse(rawURL)
+		if err != nil {
+			panic(err)
+		}
+		return o
+	}
+
+	cases := map[string]struct {
+		config       cty.Value
+		calledURL    string
+		envVars      map[string]string
+		wantProxyURL *url.URL
+
+		// wantErrSubstr contains the part indicating proxy address
+		wantErrSubstr string
+	}{
+		"shall set proxy using http_proxy config attr": {
+			config: cty.ObjectVal(map[string]cty.Value{
+				"bucket":     cty.StringVal("test"),
+				"key":        cty.StringVal("test"),
+				"http_proxy": cty.StringVal("http://foo.bar"),
+			}),
+			calledURL:    "http://qux.quxx",
+			wantProxyURL: newURL("http://foo.bar"),
+		},
+		"shall set proxy using HTTP_PROXY envvar": {
+			config: cty.ObjectVal(map[string]cty.Value{
+				"bucket": cty.StringVal("test"),
+				"key":    cty.StringVal("test"),
+			}),
+			envVars: map[string]string{
+				"HTTP_PROXY": "http://foo.com",
+			},
+			calledURL:    "http://qux.quxx",
+			wantProxyURL: newURL("http://foo.com"),
+		},
+		"shall set proxy using http_proxy config attr when HTTP_PROXY envvar is also set": {
+			config: cty.ObjectVal(map[string]cty.Value{
+				"bucket":     cty.StringVal("test"),
+				"key":        cty.StringVal("test"),
+				"http_proxy": cty.StringVal("http://foo.bar"),
+			}),
+			envVars: map[string]string{
+				"HTTP_PROXY": "http://foo.com",
+			},
+			calledURL:    "http://qux.quxx",
+			wantProxyURL: newURL("http://foo.bar"),
+		},
+		"shall set proxy using https_proxy config attr": {
+			config: cty.ObjectVal(map[string]cty.Value{
+				"bucket":      cty.StringVal("test"),
+				"key":         cty.StringVal("test"),
+				"https_proxy": cty.StringVal("https://foo.bar"),
+			}),
+			calledURL:     "https://qux.quxx",
+			wantErrSubstr: "proxyconnect tcp: dial tcp: lookup foo.bar",
+		},
+		"shall set proxy using HTTPS_PROXY envvar": {
+			config: cty.ObjectVal(map[string]cty.Value{
+				"bucket": cty.StringVal("test"),
+				"key":    cty.StringVal("test"),
+			}),
+			envVars: map[string]string{
+				"HTTPS_PROXY": "https://foo.baz",
+			},
+			calledURL:     "https://qux.quxx",
+			wantErrSubstr: "proxyconnect tcp: dial tcp: lookup foo.baz",
+		},
+		"shall set proxy using https_proxy config attr when HTTPS_PROXY envvar is also set": {
+			config: cty.ObjectVal(map[string]cty.Value{
+				"bucket":      cty.StringVal("test"),
+				"key":         cty.StringVal("test"),
+				"https_proxy": cty.StringVal("https://foo.bar"),
+			}),
+			envVars: map[string]string{
+				"HTTPS_PROXY": "https://foo.com",
+			},
+			calledURL:     "https://qux.quxx",
+			wantErrSubstr: "proxyconnect tcp: dial tcp: lookup foo.bar",
+		},
+		"shall satisfy no_proxy config attr": {
+			config: cty.ObjectVal(map[string]cty.Value{
+				"bucket":   cty.StringVal("test"),
+				"key":      cty.StringVal("test"),
+				"no_proxy": cty.StringVal("http://foo.bar,1.2.3.4"),
+			}),
+			calledURL: "http://foo.bar",
+		},
+		"shall satisfy no proxy set using NO_PROXY envvar": {
+			config: cty.ObjectVal(map[string]cty.Value{
+				"bucket": cty.StringVal("test"),
+				"key":    cty.StringVal("test"),
+			}),
+			envVars: map[string]string{
+				"NO_PROXY": "http://foo.bar,1.2.3.4",
+			},
+			calledURL: "http://foo.bar",
+		},
+		"shall satisfy no_proxy config attr when envvar NO_PROXY is also set": {
+			config: cty.ObjectVal(map[string]cty.Value{
+				"bucket":   cty.StringVal("test"),
+				"key":      cty.StringVal("test"),
+				"no_proxy": cty.StringVal("http://foo.qux,1.2.3.4"),
+			}),
+			envVars: map[string]string{
+				"NO_PROXY": "http://foo.bar",
+			},
+			calledURL: "http://foo.qux",
+		},
+		"shall satisfy use http_proxy when no_proxy is also set to identical value": {
+			config: cty.ObjectVal(map[string]cty.Value{
+				"bucket":     cty.StringVal("test"),
+				"key":        cty.StringVal("test"),
+				"http_proxy": cty.StringVal("http://foo.bar"),
+				"no_proxy":   cty.StringVal("http://foo.bar"),
+			}),
+			calledURL:    "http://qux.quxx",
+			wantProxyURL: newURL("http://foo.bar"),
+		},
+		"shall satisfy use https_proxy when no_proxy is also set to identical value": {
+			config: cty.ObjectVal(map[string]cty.Value{
+				"bucket":      cty.StringVal("test"),
+				"key":         cty.StringVal("test"),
+				"https_proxy": cty.StringVal("https://foo.bar"),
+				"no_proxy":    cty.StringVal("http://foo.bar"),
+			}),
+			calledURL:     "https://qux.quxx",
+			wantErrSubstr: "proxyconnect tcp: dial tcp: lookup foo.bar",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range tc.envVars {
+				t.Setenv(k, v)
+			}
+
+			b := New(encryption.StateEncryptionDisabled())
+
+			got := b.Configure(populateSchema(t, b.ConfigSchema(), tc.config))
+			if got.HasErrors() != (tc.wantErrSubstr != "") {
+				t.Fatalf("unexpected error: %v", got.Err())
+			}
+
+			switch got.HasErrors() {
+			case true:
+				if !strings.Contains(got.Err().Error(), tc.wantErrSubstr) {
+					t.Fatalf("unexpected error: want= %s, got= %s", tc.wantErrSubstr, got.Err().Error())
+				}
+			case false:
+				gotProxyURL, err := b.(*Backend).awsConfig.HTTPClient.(*awshttp.BuildableClient).GetTransport().Proxy(&http.Request{
+					URL: newURL(tc.calledURL),
+				})
+				if err != nil {
+					t.Fatalf("unexpected err: %v", err)
+				}
+
+				if !reflect.DeepEqual(gotProxyURL, tc.wantProxyURL) {
+					t.Fatalf("unexpected proxy URL: want= %s, got= %s", tc.wantProxyURL, gotProxyURL)
+				}
+			}
+		})
+	}
+}
+
 func TestBackend(t *testing.T) {
 	testACC(t)
 
-	bucketName := fmt.Sprintf("terraform-remote-s3-test-%x", time.Now().Unix())
+	bucketName := fmt.Sprintf("%s-%x", testBucketPrefix, time.Now().Unix())
 	keyName := "testState"
 
-	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":  bucketName,
 		"key":     keyName,
 		"encrypt": true,
@@ -949,10 +1095,10 @@ func TestBackend(t *testing.T) {
 func TestBackendLocked(t *testing.T) {
 	testACC(t)
 
-	bucketName := fmt.Sprintf("terraform-remote-s3-test-%x", time.Now().Unix())
+	bucketName := fmt.Sprintf("%s-%x", testBucketPrefix, time.Now().Unix())
 	keyName := "test/state"
 
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":         bucketName,
 		"key":            keyName,
 		"encrypt":        true,
@@ -960,7 +1106,7 @@ func TestBackendLocked(t *testing.T) {
 		"region":         "us-west-1",
 	})).(*Backend)
 
-	b2 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b2 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":         bucketName,
 		"key":            keyName,
 		"encrypt":        true,
@@ -1002,7 +1148,7 @@ func TestBackendSSECustomerKeyConfig(t *testing.T) {
 		testCase := testCase
 
 		t.Run(name, func(t *testing.T) {
-			bucketName := fmt.Sprintf("terraform-remote-s3-test-%x", time.Now().Unix())
+			bucketName := fmt.Sprintf("%s-%x", testBucketPrefix, time.Now().Unix())
 			config := map[string]interface{}{
 				"bucket":           bucketName,
 				"encrypt":          true,
@@ -1011,10 +1157,8 @@ func TestBackendSSECustomerKeyConfig(t *testing.T) {
 				"region":           "us-west-1",
 			}
 
-			b := New().(*Backend)
-			ctx := context.Background()
-
-			diags := b.Configure(ctx, populateSchema(t, b.ConfigSchema(ctx), hcl2shim.HCL2ValueFromConfigValue(config)))
+			b := New(encryption.StateEncryptionDisabled()).(*Backend)
+			diags := b.Configure(populateSchema(t, b.ConfigSchema(), hcl2shim.HCL2ValueFromConfigValue(config)))
 
 			if testCase.expectedErr != "" {
 				if diags.Err() != nil {
@@ -1067,7 +1211,7 @@ func TestBackendSSECustomerKeyEnvVar(t *testing.T) {
 		testCase := testCase
 
 		t.Run(name, func(t *testing.T) {
-			bucketName := fmt.Sprintf("terraform-remote-s3-test-%x", time.Now().Unix())
+			bucketName := fmt.Sprintf("%s-%x", testBucketPrefix, time.Now().Unix())
 			config := map[string]interface{}{
 				"bucket":  bucketName,
 				"encrypt": true,
@@ -1075,15 +1219,10 @@ func TestBackendSSECustomerKeyEnvVar(t *testing.T) {
 				"region":  "us-west-1",
 			}
 
-			os.Setenv("AWS_SSE_CUSTOMER_KEY", testCase.customerKey)
-			t.Cleanup(func() {
-				os.Unsetenv("AWS_SSE_CUSTOMER_KEY")
-			})
+			t.Setenv("AWS_SSE_CUSTOMER_KEY", testCase.customerKey)
 
-			b := New().(*Backend)
-			ctx := context.Background()
-
-			diags := b.Configure(ctx, populateSchema(t, b.ConfigSchema(ctx), hcl2shim.HCL2ValueFromConfigValue(config)))
+			b := New(encryption.StateEncryptionDisabled()).(*Backend)
+			diags := b.Configure(populateSchema(t, b.ConfigSchema(), hcl2shim.HCL2ValueFromConfigValue(config)))
 
 			if testCase.expectedErr != "" {
 				if diags.Err() != nil {
@@ -1115,10 +1254,10 @@ func TestBackendSSECustomerKeyEnvVar(t *testing.T) {
 // add some extra junk in S3 to try and confuse the env listing.
 func TestBackendExtraPaths(t *testing.T) {
 	testACC(t)
-	bucketName := fmt.Sprintf("terraform-remote-s3-test-%x", time.Now().Unix())
+	bucketName := fmt.Sprintf("%s-%x", testBucketPrefix, time.Now().Unix())
 	keyName := "test/state/tfstate"
 
-	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":  bucketName,
 		"key":     keyName,
 		"encrypt": true,
@@ -1149,7 +1288,7 @@ func TestBackendExtraPaths(t *testing.T) {
 	if err := stateMgr.WriteState(s1); err != nil {
 		t.Fatal(err)
 	}
-	if err := stateMgr.PersistState(ctx, nil); err != nil {
+	if err := stateMgr.PersistState(nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1161,7 +1300,7 @@ func TestBackendExtraPaths(t *testing.T) {
 	if err := stateMgr2.WriteState(s2); err != nil {
 		t.Fatal(err)
 	}
-	if err := stateMgr2.PersistState(ctx, nil); err != nil {
+	if err := stateMgr2.PersistState(nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1176,7 +1315,7 @@ func TestBackendExtraPaths(t *testing.T) {
 	if err := stateMgr.WriteState(states.NewState()); err != nil {
 		t.Fatal(err)
 	}
-	if err := stateMgr.PersistState(ctx, nil); err != nil {
+	if err := stateMgr.PersistState(nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := checkStateList(b, []string{"default", "s1", "s2"}); err != nil {
@@ -1188,7 +1327,7 @@ func TestBackendExtraPaths(t *testing.T) {
 	if err := stateMgr.WriteState(states.NewState()); err != nil {
 		t.Fatal(err)
 	}
-	if err := stateMgr.PersistState(ctx, nil); err != nil {
+	if err := stateMgr.PersistState(nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := checkStateList(b, []string{"default", "s1", "s2"}); err != nil {
@@ -1196,12 +1335,12 @@ func TestBackendExtraPaths(t *testing.T) {
 	}
 
 	// remove the state with extra subkey
-	if err := client.Delete(ctx); err != nil {
+	if err := client.Delete(); err != nil {
 		t.Fatal(err)
 	}
 
 	// delete the real workspace
-	if err := b.DeleteWorkspace(ctx, "s2", true); err != nil {
+	if err := b.DeleteWorkspace("s2", true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1210,11 +1349,11 @@ func TestBackendExtraPaths(t *testing.T) {
 	}
 
 	// fetch that state again, which should produce a new lineage
-	s2Mgr, err := b.StateMgr(ctx, "s2")
+	s2Mgr, err := b.StateMgr("s2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s2Mgr.RefreshState(ctx); err != nil {
+	if err := s2Mgr.RefreshState(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1229,16 +1368,16 @@ func TestBackendExtraPaths(t *testing.T) {
 	if err := stateMgr.WriteState(states.NewState()); err != nil {
 		t.Fatal(err)
 	}
-	if err := stateMgr.PersistState(ctx, nil); err != nil {
+	if err := stateMgr.PersistState(nil); err != nil {
 		t.Fatal(err)
 	}
 
 	// make sure s2 is OK
-	s2Mgr, err = b.StateMgr(ctx, "s2")
+	s2Mgr, err = b.StateMgr("s2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s2Mgr.RefreshState(ctx); err != nil {
+	if err := s2Mgr.RefreshState(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1255,9 +1394,9 @@ func TestBackendExtraPaths(t *testing.T) {
 // of the workspace name itself.
 func TestBackendPrefixInWorkspace(t *testing.T) {
 	testACC(t)
-	bucketName := fmt.Sprintf("terraform-remote-s3-test-%x", time.Now().Unix())
+	bucketName := fmt.Sprintf("%s-%x", testBucketPrefix, time.Now().Unix())
 
-	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":               bucketName,
 		"key":                  "test-env.tfstate",
 		"workspace_key_prefix": "env",
@@ -1268,11 +1407,11 @@ func TestBackendPrefixInWorkspace(t *testing.T) {
 	defer deleteS3Bucket(ctx, t, b.s3Client, bucketName)
 
 	// get a state that contains the prefix as a substring
-	sMgr, err := b.StateMgr(ctx, "env-1")
+	sMgr, err := b.StateMgr("env-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sMgr.RefreshState(ctx); err != nil {
+	if err := sMgr.RefreshState(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1285,8 +1424,8 @@ func TestKeyEnv(t *testing.T) {
 	testACC(t)
 	keyName := "some/paths/tfstate"
 
-	bucket0Name := fmt.Sprintf("terraform-remote-s3-test-%x-0", time.Now().Unix())
-	b0 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	bucket0Name := fmt.Sprintf("%s-%x-0", testBucketPrefix, time.Now().Unix())
+	b0 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":               bucket0Name,
 		"key":                  keyName,
 		"encrypt":              true,
@@ -1297,8 +1436,8 @@ func TestKeyEnv(t *testing.T) {
 	createS3Bucket(ctx, t, b0.s3Client, bucket0Name, b0.awsConfig.Region)
 	defer deleteS3Bucket(ctx, t, b0.s3Client, bucket0Name)
 
-	bucket1Name := fmt.Sprintf("terraform-remote-s3-test-%x-1", time.Now().Unix())
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	bucket1Name := fmt.Sprintf("%s-%x-1", testBucketPrefix, time.Now().Unix())
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":               bucket1Name,
 		"key":                  keyName,
 		"encrypt":              true,
@@ -1308,8 +1447,8 @@ func TestKeyEnv(t *testing.T) {
 	createS3Bucket(ctx, t, b1.s3Client, bucket1Name, b1.awsConfig.Region)
 	defer deleteS3Bucket(ctx, t, b1.s3Client, bucket1Name)
 
-	bucket2Name := fmt.Sprintf("terraform-remote-s3-test-%x-2", time.Now().Unix())
-	b2 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	bucket2Name := fmt.Sprintf("%s-%x-2", testBucketPrefix, time.Now().Unix())
+	b2 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":  bucket2Name,
 		"key":     keyName,
 		"encrypt": true,
@@ -1391,6 +1530,61 @@ func Test_pathString(t *testing.T) {
 	}
 }
 
+func TestBackend_includeProtoIfNecessary(t *testing.T) {
+	tests := []struct {
+		name     string
+		provided string
+		expected string
+	}{
+		{
+			name:     "Unmodified S3",
+			provided: "https://s3.us-east-1.amazonaws.com",
+			expected: "https://s3.us-east-1.amazonaws.com",
+		},
+		{
+			name:     "Modified S3",
+			provided: "s3.us-east-1.amazonaws.com",
+			expected: "https://s3.us-east-1.amazonaws.com",
+		},
+		{
+			name:     "Unmodified With Port",
+			provided: "http://localhost:9000/",
+			expected: "http://localhost:9000/",
+		},
+		{
+			name:     "Modified With Port",
+			provided: "localhost:9000/",
+			expected: "https://localhost:9000/",
+		},
+		{
+			name:     "Umodified with strange proto",
+			provided: "ftp://localhost:9000/",
+			expected: "ftp://localhost:9000/",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := includeProtoIfNecessary(test.provided)
+			if result != test.expected {
+				t.Errorf("Expected: %s, Got: %s", test.expected, result)
+			}
+		})
+	}
+}
+
+func TestBackend_schemaCoercionMinimal(t *testing.T) {
+	example := cty.ObjectVal(map[string]cty.Value{
+		"bucket": cty.StringVal("my-bucket"),
+		"key":    cty.StringVal("state.tf"),
+	})
+	schema := New(encryption.StateEncryptionDisabled()).ConfigSchema()
+	_, err := schema.CoerceValue(example)
+	if err != nil {
+		t.Errorf("Unexpected error: %s", err.Error())
+	}
+}
+
 func testGetWorkspaceForKey(b *Backend, key string, expected string) error {
 	if actual := b.keyEnv(key); actual != expected {
 		return fmt.Errorf("incorrect workspace for key[%q]. Expected[%q]: Actual[%q]", key, expected, actual)
@@ -1399,7 +1593,7 @@ func testGetWorkspaceForKey(b *Backend, key string, expected string) error {
 }
 
 func checkStateList(b backend.Backend, expected []string) error {
-	states, err := b.Workspaces(context.Background())
+	states, err := b.Workspaces()
 	if err != nil {
 		return err
 	}

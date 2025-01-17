@@ -15,8 +15,8 @@ configuration (like endpoint URLs or cloud regions) before they can be used.
 
 ## What Providers Do
 
-Each provider adds a set of [resource types](/docs/language/resources)
-and/or [data sources](/docs/language/data-sources) that OpenTofu can
+Each provider adds a set of [resource types](../../language/resources/index.mdx)
+and/or [data sources](../../language/data-sources/index.mdx) that OpenTofu can
 manage.
 
 Every resource type is implemented by a provider; without providers, OpenTofu
@@ -31,24 +31,19 @@ generating random numbers for unique resource names.
 Providers are distributed separately from OpenTofu itself, and each provider
 has its own release cadence and version numbers.
 
-The [Public Terraform Registry](https://registry.terraform.io/browse/providers)
+The [Public OpenTofu Registry](https://registry.opentofu.org/)
 is the main directory of publicly available providers, and hosts
 providers for most major infrastructure platforms.
 
 ## Provider Documentation
 
 Each provider has its own documentation, describing its resource
-types and their arguments.
+types and their arguments. This documentation can be found in each provider's
+GitHub repository, and the documentation for many providers is also
+mirrored on [the Providers index in the Public OpenTofu Registry](https://search.opentofu.org/providers).
 
-The [Public Terraform Registry](https://registry.terraform.io/browse/providers)
-includes documentation for a wide range of providers developed by HashiCorp, third-party vendors, and our OpenTofu community. Use the
-"Documentation" link in a provider's header to browse its documentation.
-
-Provider documentation in the Registry is versioned; you can use the version
-menu in the header to change which version you're viewing.
-
-For details about writing, generating, and previewing provider documentation,
-see the [provider publishing documentation](/docs/registry/providers/docs).
+Provider documentation is versioned, so it's important to refer to the tag or
+release matching the version you are using.
 
 ## How to Use Providers
 
@@ -57,41 +52,41 @@ Providers are released separately from OpenTofu itself and have their own versio
 To use resources from a given provider, you need to include some information
 about it in your configuration. See the following pages for details:
 
-- [Provider Requirements](/docs/language/providers/requirements)
+- [Provider Requirements](../../language/providers/requirements.mdx)
   documents how to declare providers so OpenTofu can install them.
 
-- [Provider Configuration](/docs/language/providers/configuration)
+- [Provider Configuration](../../language/providers/configuration.mdx)
   documents how to configure settings for providers.
 
-- [Dependency Lock File](/docs/language/files/dependency-lock)
+- [Dependency Lock File](../../language/files/dependency-lock.mdx)
   documents an additional HCL file that can be included with a configuration,
   which tells OpenTofu to always use a specific set of provider versions.
 
 ## Provider Installation
 
-- TACOS (TF Automation and Collaboration Software) install providers as part of every run.
+- [TACOS](../../intro/tacos.mdx) (TF Automation and Collaboration Software) install providers as part of every run.
 
 - OpenTofu CLI finds and installs providers when
-  [initializing a working directory](/docs/cli/init). It can
+  [initializing a working directory](../../cli/init/index.mdx). It can
   automatically download providers from a provider registry, or load them from
   a local mirror or cache. If you are using a persistent working directory, you
   must reinitialize whenever you change a configuration's providers.
 
   To save time and bandwidth, OpenTofu CLI supports an optional plugin
   cache. You can enable the cache using the `plugin_cache_dir` setting in
-  [the CLI configuration file](/docs/cli/config/config-file).
+  [the CLI configuration file](../../cli/config/config-file.mdx).
 
 To ensure OpenTofu always installs the same provider versions for a given
 configuration, you can use OpenTofu CLI to create a
-[dependency lock file](/docs/language/files/dependency-lock)
+[dependency lock file](../../language/files/dependency-lock.mdx)
 and commit it to version control along with your configuration. If a lock file
-is present, OpenTofu CLI, and TACOS (TF Automation and Collaboration Software) will all obey it when
+is present, OpenTofu CLI, and [TACOS](../../intro/tacos.mdx) (TF Automation and Collaboration Software) will all obey it when
 installing providers.
 
 ## How to Find Providers
 
 To find providers for the infrastructure platforms you use, browse the
-[Public Terraform Registry](https://registry.terraform.io/browse/providers).
+[Public OpenTofu Registry](https://github.com/opentofu/registry/tree/main/providers).
 
 Some providers on the Registry are developed and published by HashiCorp, some
 are published by platform maintainers, and some are published by users and
@@ -100,4 +95,14 @@ volunteers.
 ## How to Develop Providers
 
 Providers are written in Go, using the Terraform Plugin SDK. For more
-information on developing providers, see the [Plugin Development](/docs/plugin) documentation.
+information on developing providers, see the [Plugin Development](https://developer.hashicorp.com/terraform/plugin) documentation.
+
+### Running Acceptance Tests with OpenTofu CLI
+
+When testing with OpenTofu, additional steps are required to run acceptance tests against the OpenTofu CLI. Set the following environment variables before running your acceptance tests:
+
+```
+TF_ACC_TERRAFORM_PATH="/path/to/opentofu"
+TF_ACC_PROVIDER_NAMESPACE="hashicorp"
+TF_ACC_PROVIDER_HOST="registry.opentofu.org"
+```

@@ -1,6 +1,9 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
+//nolint:cyclop,gocognit // This legacy code is frozen from an older version of the codebase and will not be updated to pass any linters.
 package schema
 
 import (
@@ -70,7 +73,7 @@ func testApplyDiff(t *testing.T,
 		}
 	}
 
-	// Resource.Meta will be hanlded separately, so it's OK that we lose the
+	// Resource.Meta will be handled separately, so it's OK that we lose the
 	// timeout values here.
 	expectedState, err := StateValueFromInstanceState(expected, testSchema.Block.ImpliedType())
 	if err != nil {

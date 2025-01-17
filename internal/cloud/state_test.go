@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package cloud
@@ -13,6 +15,7 @@ import (
 	tfe "github.com/hashicorp/go-tfe"
 	"github.com/opentofu/opentofu/internal/addrs"
 	"github.com/opentofu/opentofu/internal/backend/local"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/states"
 	"github.com/opentofu/opentofu/internal/states/statefile"
 	"github.com/opentofu/opentofu/internal/states/statemgr"
@@ -40,11 +43,8 @@ func TestState_GetRootOutputValues(t *testing.T) {
 
 	state := &State{tfeClient: b.client, organization: b.organization, workspace: &tfe.Workspace{
 		ID: "ws-abcd",
-	}}
-
-	ctx := context.Background()
-
-	outputs, err := state.GetRootOutputValues(ctx)
+	}, encryption: encryption.StateEncryptionDisabled()}
+	outputs, err := state.GetRootOutputValues()
 
 	if err != nil {
 		t.Fatalf("error returned from GetRootOutputValues: %s", err)
@@ -95,7 +95,7 @@ func TestState(t *testing.T) {
 	var buf bytes.Buffer
 	s := statemgr.TestFullInitialState()
 	sf := statefile.New(s, "stub-lineage", 2)
-	err := statefile.Write(sf, &buf)
+	err := statefile.Write(sf, &buf, encryption.StateEncryptionDisabled())
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -118,13 +118,11 @@ func TestState(t *testing.T) {
 	}
 }`)
 
-	ctx := context.Background()
-
-	if err := state.uploadState(ctx, state.lineage, state.serial, state.forcePush, data, jsonState, jsonStateOutputs); err != nil {
+	if err := state.uploadState(state.lineage, state.serial, state.forcePush, data, jsonState, jsonStateOutputs); err != nil {
 		t.Fatalf("put: %s", err)
 	}
 
-	payload, err := state.getStatePayload(ctx)
+	payload, err := state.getStatePayload()
 	if err != nil {
 		t.Fatalf("get: %s", err)
 	}
@@ -132,11 +130,11 @@ func TestState(t *testing.T) {
 		t.Fatalf("expected full state %q\n\ngot: %q", string(payload.Data), string(data))
 	}
 
-	if err := state.Delete(ctx, true); err != nil {
+	if err := state.Delete(true); err != nil {
 		t.Fatalf("delete: %s", err)
 	}
 
-	p, err := state.getStatePayload(ctx)
+	p, err := state.getStatePayload()
 	if err != nil {
 		t.Fatalf("get: %s", err)
 	}
@@ -149,13 +147,11 @@ func TestCloudLocks(t *testing.T) {
 	back, bCleanup := testBackendWithName(t)
 	defer bCleanup()
 
-	ctx := context.Background()
-
-	a, err := back.StateMgr(ctx, testBackendSingleWorkspaceName)
+	a, err := back.StateMgr(testBackendSingleWorkspaceName)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	b, err := back.StateMgr(ctx, testBackendSingleWorkspaceName)
+	b, err := back.StateMgr(testBackendSingleWorkspaceName)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -178,25 +174,25 @@ func TestCloudLocks(t *testing.T) {
 	infoB.Operation = "test"
 	infoB.Who = "clientB"
 
-	lockIDA, err := lockerA.Lock(ctx, infoA)
+	lockIDA, err := lockerA.Lock(infoA)
 	if err != nil {
 		t.Fatal("unable to get initial lock:", err)
 	}
 
-	_, err = lockerB.Lock(ctx, infoB)
+	_, err = lockerB.Lock(infoB)
 	if err == nil {
-		lockerA.Unlock(ctx, lockIDA)
+		lockerA.Unlock(lockIDA)
 		t.Fatal("client B obtained lock while held by client A")
 	}
 	if _, ok := err.(*statemgr.LockError); !ok {
 		t.Errorf("expected a LockError, but was %t: %s", err, err)
 	}
 
-	if err := lockerA.Unlock(ctx, lockIDA); err != nil {
+	if err := lockerA.Unlock(lockIDA); err != nil {
 		t.Fatal("error unlocking client A", err)
 	}
 
-	lockIDB, err := lockerB.Lock(ctx, infoB)
+	lockIDB, err := lockerB.Lock(infoB)
 	if err != nil {
 		t.Fatal("unable to obtain lock from client B")
 	}
@@ -205,7 +201,7 @@ func TestCloudLocks(t *testing.T) {
 		t.Fatalf("duplicate lock IDs: %q", lockIDB)
 	}
 
-	if err = lockerB.Unlock(ctx, lockIDB); err != nil {
+	if err = lockerB.Unlock(lockIDB); err != nil {
 		t.Fatal("error unlocking client B:", err)
 	}
 }
@@ -216,11 +212,9 @@ func TestDelete_SafeDeleteNotSupported(t *testing.T) {
 	state.workspace.Permissions.CanForceDelete = nil
 	state.workspace.ResourceCount = 5
 
-	ctx := context.Background()
-
 	// Typically delete(false) should safe-delete a cloud workspace, which should fail on this workspace with resources
 	// However, since we have set the workspace canForceDelete permission to nil, we should fall back to force delete
-	if err := state.Delete(ctx, false); err != nil {
+	if err := state.Delete(false); err != nil {
 		t.Fatalf("delete: %s", err)
 	}
 	workspace, err := state.tfeClient.Workspaces.ReadByID(context.Background(), workspaceId)
@@ -235,9 +229,7 @@ func TestDelete_ForceDelete(t *testing.T) {
 	state.workspace.Permissions.CanForceDelete = tfe.Bool(true)
 	state.workspace.ResourceCount = 5
 
-	ctx := context.Background()
-
-	if err := state.Delete(ctx, true); err != nil {
+	if err := state.Delete(true); err != nil {
 		t.Fatalf("delete: %s", err)
 	}
 	workspace, err := state.tfeClient.Workspaces.ReadByID(context.Background(), workspaceId)
@@ -252,17 +244,15 @@ func TestDelete_SafeDelete(t *testing.T) {
 	state.workspace.Permissions.CanForceDelete = tfe.Bool(false)
 	state.workspace.ResourceCount = 5
 
-	ctx := context.Background()
-
 	// safe-deleting a workspace with resources should fail
-	err := state.Delete(ctx, false)
+	err := state.Delete(false)
 	if err == nil {
 		t.Fatalf("workspace should have failed to safe delete")
 	}
 
 	// safe-deleting a workspace with resources should succeed once it has no resources
 	state.workspace.ResourceCount = 0
-	if err = state.Delete(ctx, false); err != nil {
+	if err = state.Delete(false); err != nil {
 		t.Fatalf("workspace safe-delete err: %s", err)
 	}
 
@@ -280,7 +270,7 @@ func TestState_PersistState(t *testing.T) {
 			t.Fatal("expected nil initial readState")
 		}
 
-		err := cloudState.PersistState(context.Background(), nil)
+		err := cloudState.PersistState(nil)
 		if err != nil {
 			t.Fatalf("expected no error, got %q", err)
 		}
@@ -340,9 +330,7 @@ func TestState_PersistState(t *testing.T) {
 			}
 			cloudState.tfeClient = client
 
-			ctx := context.Background()
-
-			err = cloudState.RefreshState(ctx)
+			err = cloudState.RefreshState()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -353,7 +341,7 @@ func TestState_PersistState(t *testing.T) {
 				)
 			}))
 
-			err = cloudState.PersistState(ctx, nil)
+			err = cloudState.PersistState(nil)
 			if err != nil {
 				t.Fatal(err)
 			}

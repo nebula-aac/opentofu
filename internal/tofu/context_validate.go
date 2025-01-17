@@ -1,9 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
 
 import (
+	"context"
 	"log"
 
 	"github.com/opentofu/opentofu/internal/addrs"
@@ -24,7 +27,7 @@ import (
 // such as root module input variables. However, the Plan function includes
 // all of the same checks as Validate, in addition to the other work it does
 // to consider the previous run state and the planning options.
-func (c *Context) Validate(config *configs.Config) tfdiags.Diagnostics {
+func (c *Context) Validate(ctx context.Context, config *configs.Config) tfdiags.Diagnostics {
 	defer c.acquireRun("validate")()
 
 	var diags tfdiags.Diagnostics
@@ -58,20 +61,24 @@ func (c *Context) Validate(config *configs.Config) tfdiags.Diagnostics {
 		}
 	}
 
+	providerFunctionTracker := make(ProviderFunctionMapping)
+
 	graph, moreDiags := (&PlanGraphBuilder{
-		Config:             config,
-		Plugins:            c.plugins,
-		State:              states.NewState(),
-		RootVariableValues: varValues,
-		Operation:          walkValidate,
+		Config:                  config,
+		Plugins:                 c.plugins,
+		State:                   states.NewState(),
+		RootVariableValues:      varValues,
+		Operation:               walkValidate,
+		ProviderFunctionTracker: providerFunctionTracker,
 	}).Build(addrs.RootModuleInstance)
 	diags = diags.Append(moreDiags)
 	if moreDiags.HasErrors() {
 		return diags
 	}
 
-	walker, walkDiags := c.walk(graph, walkValidate, &graphWalkOpts{
-		Config: config,
+	walker, walkDiags := c.walk(ctx, graph, walkValidate, &graphWalkOpts{
+		Config:                  config,
+		ProviderFunctionTracker: providerFunctionTracker,
 	})
 	diags = diags.Append(walker.NonFatalDiagnostics)
 	diags = diags.Append(walkDiags)

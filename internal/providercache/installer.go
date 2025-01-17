@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package providercache
@@ -106,7 +108,7 @@ func (i *Installer) ProviderSource() getproviders.Source {
 func (i *Installer) SetGlobalCacheDir(cacheDir *Dir) {
 	// A little safety check to catch straightforward mistakes where the
 	// directories overlap. Better to panic early than to do
-	// possibly-distructive actions on the cache directory downstream.
+	// possibly-destructive actions on the cache directory downstream.
 	if same, err := copydir.SameFile(i.targetDir.baseDir, cacheDir.baseDir); err == nil && same {
 		panic(fmt.Sprintf("global cache directory %s must not match the installation target directory %s", cacheDir.baseDir, i.targetDir.baseDir))
 	}
@@ -289,14 +291,20 @@ NeedProvider:
 			// that context will fail immediately anyway.
 			return nil, err
 		}
-
 		if cb := evts.QueryPackagesBegin; cb != nil {
 			cb(provider, reqs[provider], locked[provider])
 		}
+		// Version 0.0.0 not supported
+		if err := checkUnspecifiedVersion(acceptableVersions); err != nil {
+			errs[provider] = err
+			if cb := evts.QueryPackagesFailure; cb != nil {
+				cb(provider, err)
+			}
+			continue
+		}
+
 		available, warnings, err := i.source.AvailableVersions(ctx, provider)
 		if err != nil {
-			// TODO: Consider retrying a few times for certain types of
-			// source errors that seem likely to be transient.
 			errs[provider] = err
 			if cb := evts.QueryPackagesFailure; cb != nil {
 				cb(provider, err)
@@ -329,6 +337,8 @@ NeedProvider:
 			err = fmt.Errorf("the previously-selected version %s is no longer available", lock.Version())
 		} else {
 			err = fmt.Errorf("no available releases match the given constraints %s", getproviders.VersionConstraintsString(reqs[provider]))
+			log.Printf("[DEBUG] %s", err.Error())
+			log.Printf("[DEBUG] Available releases: %s", available)
 		}
 		errs[provider] = err
 		if cb := evts.QueryPackagesFailure; cb != nil {
@@ -732,6 +742,15 @@ NeedProvider:
 		}
 	}
 	return locks, nil
+}
+
+// checkUnspecifiedVersion Check the presence of version 0.0.0 and return an error with a tip
+func checkUnspecifiedVersion(acceptableVersions versions.Set) error {
+	if !acceptableVersions.Exactly(versions.Unspecified) {
+		return nil
+	}
+	tip := "If the version 0.0.0 is intended to represent a non-published provider, consider using dev_overrides - https://opentofu.org/docs/cli/config/config-file/#development-overrides-for-provider-developers"
+	return fmt.Errorf("0.0.0 is not a valid provider version. \n%s", tip)
 }
 
 // InstallMode customizes the details of how an install operation treats

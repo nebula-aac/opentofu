@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 // simple provider a minimal provider implementation for testing
@@ -134,6 +136,14 @@ func (s simple) ReadDataSource(req providers.ReadDataSourceRequest) (resp provid
 	m["id"] = cty.StringVal("static_id")
 	resp.State = cty.ObjectVal(m)
 	return resp
+}
+
+func (s simple) GetFunctions() providers.GetFunctionsResponse {
+	panic("Not Implemented")
+}
+
+func (s simple) CallFunction(r providers.CallFunctionRequest) providers.CallFunctionResponse {
+	panic("Not Implemented")
 }
 
 func (s simple) Close() error {

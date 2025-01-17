@@ -1,6 +1,9 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
+//nolint:cyclop,funlen,nestif // This legacy code is frozen from an older version of the codebase and will not be updated to pass any linters.
 package schema
 
 import (
@@ -10,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mitchellh/mapstructure"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/opentofu/opentofu/internal/legacy/tofu"
 )
 
@@ -294,7 +297,7 @@ func (r *ConfigFieldReader) readSet(
 		return FieldReadResult{Value: set}, nil
 	}
 
-	// If the list is computed, the set is necessarilly computed
+	// If the list is computed, the set is necessarily computed
 	if raw.Computed {
 		return FieldReadResult{
 			Value:    set,

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package format
@@ -68,7 +70,7 @@ func ObjectValueID(obj cty.Value) (k, v string) {
 // If such an attribute is found, its name and string value intended for
 // display are returned. Both returned strings are empty if no such attribute
 // exists, in which case the caller should assume that the resource instance
-// address within the Terraform configuration is the best available identifier.
+// address within the OpenTofu configuration is the best available identifier.
 //
 // This is only a best-effort sort of thing, relying on naming conventions in
 // our resource type schemas. The result is not guaranteed to be unique, but
@@ -76,7 +78,7 @@ func ObjectValueID(obj cty.Value) (k, v string) {
 //
 // Callers that use both ObjectValueName and ObjectValueID at the same time
 // should be prepared to get the same attribute key and value from both in
-// some cases, since there is overlap betweek the id-extraction and
+// some cases, since there is overlap between the id-extraction and
 // name-extraction heuristics.
 //
 // This function will panic if the given value is not of an object type.

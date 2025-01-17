@@ -7,7 +7,7 @@ description: >-
 # Command: state replace-provider
 
 The `tofu state replace-provider` command is used to replace the provider
-for resources in a [OpenTofu state](/docs/language/state).
+for resources in a [OpenTofu state](../../../language/state/index.mdx).
 
 ## Usage
 
@@ -21,6 +21,14 @@ This command will output a backup copy of the state prior to saving any
 changes. The backup cannot be disabled. Due to the destructive nature
 of this command, backups are required.
 
+:::note
+Use of variables in [module sources](../../../language/modules/sources.mdx#support-for-variable-and-local-evaluation),
+[backend configuration](../../../language/settings/backends/configuration.mdx#variables-and-locals),
+or [encryption block](../../../language/state/encryption.mdx#configuration)
+requires [assigning values to root module variables](../../../language/values/variables.mdx#assigning-values-to-root-module-variables)
+when running `tofu state replace-providers`.
+:::
+
 This command also accepts the following options:
 
 - `-auto-approve` - Skip interactive approval.
@@ -31,15 +39,31 @@ This command also accepts the following options:
 
 - `-lock-timeout=0s` - Duration to retry a state lock.
 
-For configurations using the [`cloud` backend](/docs/cli/cloud) or the [`remote` backend](/docs/language/settings/backends/remote)
+- `-var 'NAME=VALUE'` - Sets a value for a single
+  [input variable](../../../language/values/variables.mdx) declared in the
+  root module of the configuration. Use this option multiple times to set
+  more than one variable. Refer to
+  [Input Variables on the Command Line](../plan.mdx#input-variables-on-the-command-line) for more information.
+
+- `-var-file=FILENAME` - Sets values for potentially many
+  [input variables](../../../language/values/variables.mdx) declared in the
+  root module of the configuration, using definitions from a
+  ["tfvars" file](../../../language/values/variables.mdx#variable-definitions-tfvars-files).
+  Use this option multiple times to include values from more than one file.
+
+There are several other ways to set values for input variables in the root
+module, aside from the `-var` and `-var-file` options. Refer to
+[Assigning Values to Root Module Variables](../../../language/values/variables.mdx#assigning-values-to-root-module-variables) for more information.
+
+For configurations using the [`cloud` backend](../../../cli/cloud/index.mdx) or the [`remote` backend](../../../language/settings/backends/remote.mdx)
 only, `tofu state replace-provider`
 also accepts the option
-[`-ignore-remote-version`](/docs/cli/cloud/command-line-arguments#ignore-remote-version).
+[`-ignore-remote-version`](../../../cli/cloud/command-line-arguments.mdx#ignore-remote-version).
 
 For configurations using
-[the `local` state](/docs/language/settings/backends/local) only,
+[the `local` state](../../../language/settings/backends/local.mdx) only,
 `tofu state replace-provider` also accepts the legacy options
-[`-state`, `-state-out`, and `-backup`](/docs/language/settings/backends/local#command-line-arguments).
+[`-state`, `-state-out`, and `-backup`](../../../language/settings/backends/local.mdx#command-line-arguments).
 
 ## Example
 

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package plugin
@@ -9,7 +11,7 @@ import (
 	"github.com/opentofu/opentofu/internal/tofu"
 )
 
-// UIOutput is an implementatin of tofu.UIOutput that communicates
+// UIOutput is an implementation of tofu.UIOutput that communicates
 // over RPC.
 type UIOutput struct {
 	Client *rpc.Client

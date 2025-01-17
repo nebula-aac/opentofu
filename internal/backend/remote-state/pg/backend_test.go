@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package pg
@@ -7,7 +9,6 @@ package pg
 // TF_ACC=1 GO111MODULE=on go test -v -mod=vendor -timeout=2m -parallel=4 github.com/opentofu/opentofu/backend/remote-state/pg
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"net/url"
@@ -18,6 +19,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hcldec"
 	"github.com/lib/pq"
 	"github.com/opentofu/opentofu/internal/backend"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/states/remote"
 	"github.com/opentofu/opentofu/internal/states/statemgr"
 	"github.com/opentofu/opentofu/internal/tfdiags"
@@ -27,22 +29,22 @@ import (
 //
 // A running Postgres server identified by env variable
 // DATABASE_URL is required for acceptance tests.
-func testACC(t *testing.T) string {
-	skip := os.Getenv("TF_ACC") == ""
+func testACC(t *testing.T) (connectionURI *url.URL) {
+	skip := os.Getenv("TF_ACC") == "" && os.Getenv("TF_PG_TEST") == ""
 	if skip {
-		t.Log("pg backend tests require setting TF_ACC")
+		t.Log("pg backend tests requires setting TF_ACC or TF_PG_TEST")
 		t.Skip()
 	}
 	databaseUrl, found := os.LookupEnv("DATABASE_URL")
 	if !found {
-		databaseUrl = "postgres://localhost/terraform_backend_pg_test?sslmode=disable"
-		os.Setenv("DATABASE_URL", databaseUrl)
+		t.Fatal("pg backend tests require setting DATABASE_URL")
 	}
+
 	u, err := url.Parse(databaseUrl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return u.Path[1:]
+	return u
 }
 
 func TestBackend_impl(t *testing.T) {
@@ -50,8 +52,15 @@ func TestBackend_impl(t *testing.T) {
 }
 
 func TestBackendConfig(t *testing.T) {
-	databaseName := testACC(t)
-	connStr := getDatabaseUrl()
+	connectionURI := testACC(t)
+	connStr := os.Getenv("DATABASE_URL")
+
+	user := connectionURI.User.Username()
+	password, _ := connectionURI.User.Password()
+	databaseName := connectionURI.Path[1:]
+
+	connectionURIObfuscated := connectionURI
+	connectionURIObfuscated.User = nil
 
 	testCases := []struct {
 		Name                     string
@@ -72,6 +81,8 @@ func TestBackendConfig(t *testing.T) {
 			EnvVars: map[string]string{
 				"PGSSLMODE":  "disable",
 				"PGDATABASE": databaseName,
+				"PGUSER":     user,
+				"PGPASSWORD": password,
 			},
 			Config: map[string]interface{}{
 				"schema_name": fmt.Sprintf("terraform_%s", t.Name()),
@@ -93,10 +104,10 @@ func TestBackendConfig(t *testing.T) {
 				"PGPASSWORD": "badpassword",
 			},
 			Config: map[string]interface{}{
-				"conn_str":    connStr,
+				"conn_str":    connectionURIObfuscated.String(),
 				"schema_name": fmt.Sprintf("terraform_%s", t.Name()),
 			},
-			ExpectConnectionError: `role "baduser" does not exist`,
+			ExpectConnectionError: `authentication failed for user "baduser"`,
 		},
 		{
 			Name: "host-in-env-vars",
@@ -118,6 +129,7 @@ func TestBackendConfig(t *testing.T) {
 				"PGDATABASE":              databaseName,
 			},
 			Config: map[string]interface{}{
+				"conn_str":    connStr,
 				"schema_name": fmt.Sprintf("terraform_%s", t.Name()),
 			},
 		},
@@ -150,16 +162,14 @@ func TestBackendConfig(t *testing.T) {
 			}
 			defer dbCleaner.Query(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName))
 
-			ctx := context.Background()
-
 			var diags tfdiags.Diagnostics
-			b := New().(*Backend)
-			schema := b.ConfigSchema(ctx)
+			b := New(encryption.StateEncryptionDisabled()).(*Backend)
+			schema := b.ConfigSchema()
 			spec := schema.DecoderSpec()
 			obj, decDiags := hcldec.Decode(config, spec, nil)
 			diags = diags.Append(decDiags)
 
-			newObj, valDiags := b.PrepareConfig(ctx, obj)
+			newObj, valDiags := b.PrepareConfig(obj)
 			diags = diags.Append(valDiags.InConfigBody(config, ""))
 
 			if tc.ExpectConfigurationError != "" {
@@ -176,7 +186,7 @@ func TestBackendConfig(t *testing.T) {
 
 			obj = newObj
 
-			confDiags := b.Configure(ctx, obj)
+			confDiags := b.Configure(obj)
 			if tc.ExpectConnectionError != "" {
 				err := confDiags.InConfigBody(config, "").ErrWithWarnings()
 				if err == nil {
@@ -200,12 +210,12 @@ func TestBackendConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			_, err = b.StateMgr(ctx, backend.DefaultStateName)
+			_, err = b.StateMgr(backend.DefaultStateName)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			s, err := b.StateMgr(ctx, backend.DefaultStateName)
+			s, err := b.StateMgr(backend.DefaultStateName)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -316,7 +326,7 @@ func TestBackendConfigSkipOptions(t *testing.T) {
 			}
 			defer db.Query(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName))
 
-			b := backend.TestBackendConfig(t, New(), config).(*Backend)
+			b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), config).(*Backend)
 
 			if b == nil {
 				t.Fatal("Backend could not be configured")
@@ -341,14 +351,12 @@ func TestBackendConfigSkipOptions(t *testing.T) {
 				}
 			}
 
-			ctx := context.Background()
-
-			_, err = b.StateMgr(ctx, backend.DefaultStateName)
+			_, err = b.StateMgr(backend.DefaultStateName)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			s, err := b.StateMgr(ctx, backend.DefaultStateName)
+			s, err := b.StateMgr(backend.DefaultStateName)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -391,7 +399,7 @@ func TestBackendStates(t *testing.T) {
 				"conn_str":    connStr,
 				"schema_name": schemaName,
 			})
-			b := backend.TestBackendConfig(t, New(), config).(*Backend)
+			b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), config).(*Backend)
 
 			if b == nil {
 				t.Fatal("Backend could not be configured")
@@ -416,13 +424,13 @@ func TestBackendStateLocks(t *testing.T) {
 		"conn_str":    connStr,
 		"schema_name": schemaName,
 	})
-	b := backend.TestBackendConfig(t, New(), config).(*Backend)
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), config).(*Backend)
 
 	if b == nil {
 		t.Fatal("Backend could not be configured")
 	}
 
-	bb := backend.TestBackendConfig(t, New(), config).(*Backend)
+	bb := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), config).(*Backend)
 
 	if bb == nil {
 		t.Fatal("Backend could not be configured")
@@ -439,21 +447,18 @@ func TestBackendConcurrentLock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx := context.Background()
-
 	getStateMgr := func(schemaName string) (statemgr.Full, *statemgr.LockInfo) {
 		defer dbCleaner.Query(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName))
 		config := backend.TestWrapConfig(map[string]interface{}{
 			"conn_str":    connStr,
 			"schema_name": schemaName,
 		})
-		b := backend.TestBackendConfig(t, New(), config).(*Backend)
+		b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), config).(*Backend)
 
 		if b == nil {
 			t.Fatal("Backend could not be configured")
 		}
-
-		stateMgr, err := b.StateMgr(ctx, backend.DefaultStateName)
+		stateMgr, err := b.StateMgr(backend.DefaultStateName)
 		if err != nil {
 			t.Fatalf("Failed to get the state manager: %v", err)
 		}
@@ -470,48 +475,48 @@ func TestBackendConcurrentLock(t *testing.T) {
 
 	// First we need to create the workspace as the lock for creating them is
 	// global
-	lockID1, err := s1.Lock(ctx, i1)
+	lockID1, err := s1.Lock(i1)
 	if err != nil {
 		t.Fatalf("failed to lock first state: %v", err)
 	}
 
-	if err = s1.PersistState(ctx, nil); err != nil {
+	if err = s1.PersistState(nil); err != nil {
 		t.Fatalf("failed to persist state: %v", err)
 	}
 
-	if err := s1.Unlock(ctx, lockID1); err != nil {
+	if err := s1.Unlock(lockID1); err != nil {
 		t.Fatalf("failed to unlock first state: %v", err)
 	}
 
-	lockID2, err := s2.Lock(ctx, i2)
+	lockID2, err := s2.Lock(i2)
 	if err != nil {
 		t.Fatalf("failed to lock second state: %v", err)
 	}
 
-	if err = s2.PersistState(ctx, nil); err != nil {
+	if err = s2.PersistState(nil); err != nil {
 		t.Fatalf("failed to persist state: %v", err)
 	}
 
-	if err := s2.Unlock(ctx, lockID2); err != nil {
+	if err := s2.Unlock(lockID2); err != nil {
 		t.Fatalf("failed to unlock first state: %v", err)
 	}
 
 	// Now we can test concurrent lock
-	lockID1, err = s1.Lock(ctx, i1)
+	lockID1, err = s1.Lock(i1)
 	if err != nil {
 		t.Fatalf("failed to lock first state: %v", err)
 	}
 
-	lockID2, err = s2.Lock(ctx, i2)
+	lockID2, err = s2.Lock(i2)
 	if err != nil {
 		t.Fatalf("failed to lock second state: %v", err)
 	}
 
-	if err := s1.Unlock(ctx, lockID1); err != nil {
+	if err := s1.Unlock(lockID1); err != nil {
 		t.Fatalf("failed to unlock first state: %v", err)
 	}
 
-	if err := s2.Unlock(ctx, lockID2); err != nil {
+	if err := s2.Unlock(lockID2); err != nil {
 		t.Fatalf("failed to unlock first state: %v", err)
 	}
 }

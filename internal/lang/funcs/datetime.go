@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package funcs
@@ -91,7 +93,7 @@ var TimeCmpFunc = function.New(&function.Spec{
 		case tsA.Before(tsB):
 			return cty.NumberIntVal(-1), nil
 		default:
-			// By elimintation, tsA must be after tsB.
+			// By elimination, tsA must be after tsB.
 			return cty.NumberIntVal(1), nil
 		}
 	},

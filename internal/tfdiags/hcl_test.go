@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tfdiags
@@ -94,6 +96,10 @@ func (e *fakeHCLExpression) StartRange() hcl.Range {
 }
 
 func (e *fakeHCLExpression) Variables() []hcl.Traversal {
+	return nil
+}
+
+func (e *fakeHCLExpression) Functions() []hcl.Traversal {
 	return nil
 }
 

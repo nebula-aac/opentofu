@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package schema
@@ -20,7 +22,7 @@ var ReservedProviderFields = []string{
 	"version",
 }
 
-// Provider represents a resource provider in Terraform, and properly
+// Provider represents a resource provider in OpenTofu, and properly
 // implements all of the ResourceProvider API.
 //
 // By defining a schema for the configuration of the provider, the
@@ -58,7 +60,7 @@ type Provider struct {
 	// this can be omitted. This functionality is currently experimental
 	// and subject to change or break without warning; it should only be
 	// used by providers that are collaborating on its use with the
-	// Terraform team.
+	// OpenTofu team.
 	ProviderMetaSchema map[string]*Schema
 
 	// ConfigureFunc is a function for configuring the provider. If the

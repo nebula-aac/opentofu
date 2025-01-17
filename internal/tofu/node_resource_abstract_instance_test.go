@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -7,11 +9,12 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/zclconf/go-cty/cty"
+
 	"github.com/opentofu/opentofu/internal/addrs"
 	"github.com/opentofu/opentofu/internal/configs"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
 	"github.com/opentofu/opentofu/internal/states"
-	"github.com/zclconf/go-cty/cty"
 )
 
 func TestNodeAbstractResourceInstanceProvider(t *testing.T) {
@@ -128,9 +131,11 @@ func TestNodeAbstractResourceInstanceProvider(t *testing.T) {
 				// function. (This would not be valid for some other functions.)
 				Addr: test.Addr,
 				NodeAbstractResource: NodeAbstractResource{
-					Addr:                 test.Addr.ConfigResource(),
-					Config:               test.Config,
-					storedProviderConfig: test.StoredProviderConfig,
+					Addr:   test.Addr.ConfigResource(),
+					Config: test.Config,
+					storedProviderConfig: ResolvedProvider{
+						ProviderConfig: test.StoredProviderConfig,
+					},
 				},
 			}
 			got := node.Provider()
@@ -167,7 +172,7 @@ func TestNodeAbstractResourceInstance_WriteResourceInstanceState(t *testing.T) {
 		Addr: mustResourceInstanceAddr("aws_instance.foo"),
 		// instanceState:        obj,
 		NodeAbstractResource: NodeAbstractResource{
-			ResolvedProvider: mustProviderConfig(`provider["registry.opentofu.org/hashicorp/aws"]`),
+			ResolvedProvider: ResolvedProvider{ProviderConfig: mustProviderConfig(`provider["registry.opentofu.org/hashicorp/aws"]`)},
 		},
 	}
 	ctx.ProviderProvider = mockProvider

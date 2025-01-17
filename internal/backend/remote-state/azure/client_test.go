@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package azure
@@ -9,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/opentofu/opentofu/internal/backend"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/legacy/helper/acctest"
 	"github.com/opentofu/opentofu/internal/states/remote"
 	"github.com/tombuildsstuff/giovanni/storage/2018-11-09/blob/blobs"
@@ -25,14 +28,14 @@ func TestRemoteClientAccessKeyBasic(t *testing.T) {
 	res := testResourceNames(rs, "testState")
 	armClient := buildTestClient(t, res)
 
-	ctx := context.Background()
+	ctx := context.TODO()
 	err := armClient.buildTestResources(ctx, &res)
 	defer armClient.destroyTestResources(ctx, res)
 	if err != nil {
 		t.Fatalf("Error creating Test Resources: %q", err)
 	}
 
-	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"storage_account_name": res.storageAccountName,
 		"container_name":       res.storageContainerName,
 		"key":                  res.storageKeyName,
@@ -41,7 +44,7 @@ func TestRemoteClientAccessKeyBasic(t *testing.T) {
 		"endpoint":             os.Getenv("ARM_ENDPOINT"),
 	})).(*Backend)
 
-	state, err := b.StateMgr(ctx, backend.DefaultStateName)
+	state, err := b.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,14 +58,14 @@ func TestRemoteClientManagedServiceIdentityBasic(t *testing.T) {
 	res := testResourceNames(rs, "testState")
 	armClient := buildTestClient(t, res)
 
-	ctx := context.Background()
+	ctx := context.TODO()
 	err := armClient.buildTestResources(ctx, &res)
 	defer armClient.destroyTestResources(ctx, res)
 	if err != nil {
 		t.Fatalf("Error creating Test Resources: %q", err)
 	}
 
-	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"storage_account_name": res.storageAccountName,
 		"container_name":       res.storageContainerName,
 		"key":                  res.storageKeyName,
@@ -74,7 +77,7 @@ func TestRemoteClientManagedServiceIdentityBasic(t *testing.T) {
 		"endpoint":             os.Getenv("ARM_ENDPOINT"),
 	})).(*Backend)
 
-	state, err := b.StateMgr(ctx, backend.DefaultStateName)
+	state, err := b.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +91,7 @@ func TestRemoteClientSasTokenBasic(t *testing.T) {
 	res := testResourceNames(rs, "testState")
 	armClient := buildTestClient(t, res)
 
-	ctx := context.Background()
+	ctx := context.TODO()
 	err := armClient.buildTestResources(ctx, &res)
 	defer armClient.destroyTestResources(ctx, res)
 	if err != nil {
@@ -100,7 +103,7 @@ func TestRemoteClientSasTokenBasic(t *testing.T) {
 		t.Fatalf("Error building SAS Token: %+v", err)
 	}
 
-	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"storage_account_name": res.storageAccountName,
 		"container_name":       res.storageContainerName,
 		"key":                  res.storageKeyName,
@@ -109,7 +112,7 @@ func TestRemoteClientSasTokenBasic(t *testing.T) {
 		"endpoint":             os.Getenv("ARM_ENDPOINT"),
 	})).(*Backend)
 
-	state, err := b.StateMgr(ctx, backend.DefaultStateName)
+	state, err := b.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,14 +126,14 @@ func TestRemoteClientServicePrincipalBasic(t *testing.T) {
 	res := testResourceNames(rs, "testState")
 	armClient := buildTestClient(t, res)
 
-	ctx := context.Background()
+	ctx := context.TODO()
 	err := armClient.buildTestResources(ctx, &res)
 	defer armClient.destroyTestResources(ctx, res)
 	if err != nil {
 		t.Fatalf("Error creating Test Resources: %q", err)
 	}
 
-	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"storage_account_name": res.storageAccountName,
 		"container_name":       res.storageContainerName,
 		"key":                  res.storageKeyName,
@@ -143,7 +146,7 @@ func TestRemoteClientServicePrincipalBasic(t *testing.T) {
 		"endpoint":             os.Getenv("ARM_ENDPOINT"),
 	})).(*Backend)
 
-	state, err := b.StateMgr(ctx, backend.DefaultStateName)
+	state, err := b.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,14 +160,14 @@ func TestRemoteClientAccessKeyLocks(t *testing.T) {
 	res := testResourceNames(rs, "testState")
 	armClient := buildTestClient(t, res)
 
-	ctx := context.Background()
+	ctx := context.TODO()
 	err := armClient.buildTestResources(ctx, &res)
 	defer armClient.destroyTestResources(ctx, res)
 	if err != nil {
 		t.Fatalf("Error creating Test Resources: %q", err)
 	}
 
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"storage_account_name": res.storageAccountName,
 		"container_name":       res.storageContainerName,
 		"key":                  res.storageKeyName,
@@ -173,7 +176,7 @@ func TestRemoteClientAccessKeyLocks(t *testing.T) {
 		"endpoint":             os.Getenv("ARM_ENDPOINT"),
 	})).(*Backend)
 
-	b2 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b2 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"storage_account_name": res.storageAccountName,
 		"container_name":       res.storageContainerName,
 		"key":                  res.storageKeyName,
@@ -182,12 +185,12 @@ func TestRemoteClientAccessKeyLocks(t *testing.T) {
 		"endpoint":             os.Getenv("ARM_ENDPOINT"),
 	})).(*Backend)
 
-	s1, err := b1.StateMgr(ctx, backend.DefaultStateName)
+	s1, err := b1.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	s2, err := b2.StateMgr(ctx, backend.DefaultStateName)
+	s2, err := b2.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,14 +204,14 @@ func TestRemoteClientServicePrincipalLocks(t *testing.T) {
 	res := testResourceNames(rs, "testState")
 	armClient := buildTestClient(t, res)
 
-	ctx := context.Background()
+	ctx := context.TODO()
 	err := armClient.buildTestResources(ctx, &res)
 	defer armClient.destroyTestResources(ctx, res)
 	if err != nil {
 		t.Fatalf("Error creating Test Resources: %q", err)
 	}
 
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"storage_account_name": res.storageAccountName,
 		"container_name":       res.storageContainerName,
 		"key":                  res.storageKeyName,
@@ -221,7 +224,7 @@ func TestRemoteClientServicePrincipalLocks(t *testing.T) {
 		"endpoint":             os.Getenv("ARM_ENDPOINT"),
 	})).(*Backend)
 
-	b2 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b2 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"storage_account_name": res.storageAccountName,
 		"container_name":       res.storageContainerName,
 		"key":                  res.storageKeyName,
@@ -234,12 +237,12 @@ func TestRemoteClientServicePrincipalLocks(t *testing.T) {
 		"endpoint":             os.Getenv("ARM_ENDPOINT"),
 	})).(*Backend)
 
-	s1, err := b1.StateMgr(ctx, backend.DefaultStateName)
+	s1, err := b1.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	s2, err := b2.StateMgr(ctx, backend.DefaultStateName)
+	s2, err := b2.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +300,7 @@ func TestPutMaintainsMetaData(t *testing.T) {
 	}
 
 	bytes := []byte(acctest.RandString(20))
-	err = remoteClient.Put(ctx, bytes)
+	err = remoteClient.Put(bytes)
 	if err != nil {
 		t.Fatalf("Error putting data: %+v", err)
 	}

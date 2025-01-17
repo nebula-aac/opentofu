@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package configs
@@ -9,8 +11,8 @@ import (
 	"github.com/hashicorp/hcl/v2"
 
 	"github.com/opentofu/opentofu/internal/addrs"
+	"github.com/opentofu/opentofu/internal/encryption/config"
 	"github.com/opentofu/opentofu/internal/experiments"
-
 	tfversion "github.com/opentofu/opentofu/version"
 )
 
@@ -39,6 +41,7 @@ type Module struct {
 	ProviderRequirements *RequiredProviders
 	ProviderLocalNames   map[addrs.Provider]string
 	ProviderMetas        map[addrs.Provider]*ProviderMeta
+	Encryption           *config.EncryptionConfig
 
 	Variables map[string]*Variable
 	Locals    map[string]*Local
@@ -49,12 +52,27 @@ type Module struct {
 	ManagedResources map[string]*Resource
 	DataResources    map[string]*Resource
 
-	Moved  []*Moved
-	Import []*Import
+	Moved   []*Moved
+	Import  []*Import
+	Removed []*Removed
 
 	Checks map[string]*Check
 
 	Tests map[string]*TestFile
+
+	// IsOverridden indicates if the module is being overridden. It's used in
+	// testing framework to not call the underlying module.
+	IsOverridden bool
+
+	// StaticEvaluator is used to evaluate static expressions in the scope of the Module.
+	StaticEvaluator *StaticEvaluator
+}
+
+// GetProviderConfig uses name and alias to find the respective Provider configuration.
+func (m *Module) GetProviderConfig(name, alias string) (*Provider, bool) {
+	tp := &Provider{Name: name, Alias: alias}
+	p, ok := m.ProviderConfigs[tp.moduleUniqueKey()]
+	return p, ok
 }
 
 // File describes the contents of a single configuration file.
@@ -78,6 +96,7 @@ type File struct {
 	ProviderConfigs   []*Provider
 	ProviderMetas     []*ProviderMeta
 	RequiredProviders []*RequiredProviders
+	Encryptions       []*config.EncryptionConfig
 
 	Variables []*Variable
 	Locals    []*Local
@@ -88,16 +107,51 @@ type File struct {
 	ManagedResources []*Resource
 	DataResources    []*Resource
 
-	Moved  []*Moved
-	Import []*Import
+	Moved   []*Moved
+	Import  []*Import
+	Removed []*Removed
 
 	Checks []*Check
 }
 
+// SelectiveLoader allows the consumer to only load and validate the portions of files needed for the given operations/contexts
+type SelectiveLoader int
+
+const (
+	SelectiveLoadAll        SelectiveLoader = 0
+	SelectiveLoadBackend    SelectiveLoader = 1
+	SelectiveLoadEncryption SelectiveLoader = 2
+)
+
+// Apply the selective filter to the input files
+func (s SelectiveLoader) filter(input []*File) []*File {
+	if s == SelectiveLoadAll {
+		return input
+	}
+
+	out := make([]*File, len(input))
+	for i, inFile := range input {
+		outFile := &File{
+			Variables: inFile.Variables,
+			Locals:    inFile.Locals,
+		}
+
+		switch s { //nolint:exhaustive // SelectiveLoadAll handled above
+		case SelectiveLoadBackend:
+			outFile.Backends = inFile.Backends
+			outFile.CloudConfigs = inFile.CloudConfigs
+		case SelectiveLoadEncryption:
+			outFile.Encryptions = inFile.Encryptions
+		}
+		out[i] = outFile
+	}
+	return out
+}
+
 // NewModuleWithTests matches NewModule except it will also load in the provided
 // test files.
-func NewModuleWithTests(primaryFiles, overrideFiles []*File, testFiles map[string]*TestFile) (*Module, hcl.Diagnostics) {
-	mod, diags := NewModule(primaryFiles, overrideFiles)
+func NewModuleWithTests(primaryFiles, overrideFiles []*File, testFiles map[string]*TestFile, call StaticModuleCall, sourceDir string) (*Module, hcl.Diagnostics) {
+	mod, diags := NewModule(primaryFiles, overrideFiles, call, sourceDir, SelectiveLoadAll)
 	if mod != nil {
 		mod.Tests = testFiles
 	}
@@ -112,7 +166,7 @@ func NewModuleWithTests(primaryFiles, overrideFiles []*File, testFiles map[strin
 // will be incomplete and error diagnostics will be returned. Careful static
 // analysis of the returned Module is still possible in this case, but the
 // module will probably not be semantically valid.
-func NewModule(primaryFiles, overrideFiles []*File) (*Module, hcl.Diagnostics) {
+func NewModule(primaryFiles, overrideFiles []*File, call StaticModuleCall, sourceDir string, load SelectiveLoader) (*Module, hcl.Diagnostics) {
 	var diags hcl.Diagnostics
 	mod := &Module{
 		ProviderConfigs:    map[string]*Provider{},
@@ -126,7 +180,12 @@ func NewModule(primaryFiles, overrideFiles []*File) (*Module, hcl.Diagnostics) {
 		Checks:             map[string]*Check{},
 		ProviderMetas:      map[addrs.Provider]*ProviderMeta{},
 		Tests:              map[string]*TestFile{},
+		SourceDir:          sourceDir,
 	}
+
+	// Apply selective load rules
+	primaryFiles = load.filter(primaryFiles)
+	overrideFiles = load.filter(overrideFiles)
 
 	// Process the required_providers blocks first, to ensure that all
 	// resources have access to the correct provider FQNs
@@ -171,6 +230,29 @@ func NewModule(primaryFiles, overrideFiles []*File) (*Module, hcl.Diagnostics) {
 	for _, file := range overrideFiles {
 		fileDiags := mod.mergeFile(file)
 		diags = append(diags, fileDiags...)
+	}
+
+	// Static evaluation to build a StaticContext now that module has all relevant Locals / Variables
+	mod.StaticEvaluator = NewStaticEvaluator(mod, call)
+
+	// If we have a backend, it may have fields that require locals/vars
+	if mod.Backend != nil {
+		// We don't know the backend type / loader at this point so we save the context for later use
+		mod.Backend.Eval = mod.StaticEvaluator
+	}
+	if mod.CloudConfig != nil {
+		mod.CloudConfig.eval = mod.StaticEvaluator
+	}
+
+	// Process all module calls now that we have the static context
+	for _, mc := range mod.ModuleCalls {
+		mDiags := mc.decodeStaticFields(mod.StaticEvaluator)
+		diags = append(diags, mDiags...)
+	}
+
+	for _, pc := range mod.ProviderConfigs {
+		pDiags := pc.decodeStaticFields(mod.StaticEvaluator)
+		diags = append(diags, pDiags...)
 	}
 
 	diags = append(diags, checkModuleExperiments(mod)...)
@@ -274,6 +356,19 @@ func (m *Module) appendFile(file *File) hcl.Diagnostics {
 			})
 		}
 		m.ProviderMetas[provider] = pm
+	}
+
+	for _, e := range file.Encryptions {
+		if m.Encryption != nil {
+			diags = append(diags, &hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Duplicate encryption configuration",
+				Detail:   fmt.Sprintf("A module may have only one encryption configuration. Encryption was previously configured at %s.", m.Encryption.DeclRange),
+				Subject:  &e.DeclRange,
+			})
+			continue
+		}
+		m.Encryption = e
 	}
 
 	for _, v := range file.Variables {
@@ -422,11 +517,11 @@ func (m *Module) appendFile(file *File) hcl.Diagnostics {
 
 	for _, i := range file.Import {
 		for _, mi := range m.Import {
-			if i.To.Equal(mi.To) {
+			if i.ResolvedTo != nil && mi.ResolvedTo != nil && (*i.ResolvedTo).Equal(*mi.ResolvedTo) {
 				diags = append(diags, &hcl.Diagnostic{
 					Severity: hcl.DiagError,
-					Summary:  fmt.Sprintf("Duplicate import configuration for %q", i.To),
-					Detail:   fmt.Sprintf("An import block for the resource %q was already declared at %s. A resource can have only one import block.", i.To, mi.DeclRange),
+					Summary:  fmt.Sprintf("Duplicate import configuration for %q", *i.ResolvedTo),
+					Detail:   fmt.Sprintf("An import block for the resource %q was already declared at %s. A resource can have only one import block.", *i.ResolvedTo, mi.DeclRange),
 					Subject:  &i.DeclRange,
 				})
 				continue
@@ -439,7 +534,7 @@ func (m *Module) appendFile(file *File) hcl.Diagnostics {
 				Alias:     i.ProviderConfigRef.Alias,
 			})
 		} else {
-			implied, err := addrs.ParseProviderPart(i.To.Resource.Resource.ImpliedProvider())
+			implied, err := addrs.ParseProviderPart(i.StaticTo.Resource.ImpliedProvider())
 			if err == nil {
 				i.Provider = m.ImpliedProviderForUnqualifiedType(implied)
 			}
@@ -447,24 +542,10 @@ func (m *Module) appendFile(file *File) hcl.Diagnostics {
 			// will already have been caught.
 		}
 
-		// It is invalid for any import block to have a "to" argument matching
-		// any moved block's "from" argument.
-		for _, mb := range m.Moved {
-			// Comparing string serialisations is good enough here, because we
-			// only care about equality in the case that both addresses are
-			// AbsResourceInstances.
-			if mb.From.String() == i.To.String() {
-				diags = append(diags, &hcl.Diagnostic{
-					Severity: hcl.DiagError,
-					Summary:  "Cannot import to a move source",
-					Detail:   fmt.Sprintf("An import block for ID %q targets resource address %s, but this address appears in the \"from\" argument of a moved block, which is invalid. Please change the import target to a different address, such as the move target.", i.ID, i.To),
-					Subject:  &i.DeclRange,
-				})
-			}
-		}
-
 		m.Import = append(m.Import, i)
 	}
+
+	m.Removed = append(m.Removed, file.Removed...)
 
 	return diags
 }
@@ -543,6 +624,22 @@ func (m *Module) mergeFile(file *File) hcl.Diagnostics {
 			}
 			mergeDiags := existing.merge(pc)
 			diags = append(diags, mergeDiags...)
+		}
+	}
+
+	if len(file.Encryptions) != 0 {
+		switch len(file.Encryptions) {
+		case 1:
+			m.Encryption = m.Encryption.Merge(file.Encryptions[0])
+		default:
+			// An override file with multiple encryptions is still invalid, even
+			// though it can override encryptions from _other_ files.
+			diags = append(diags, &hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Duplicate encryption configuration",
+				Detail:   fmt.Sprintf("Each override file may have only one encryption configuration. Encryption was previously configured at %s.", file.Encryptions[0].DeclRange),
+				Subject:  &file.Encryptions[1].DeclRange,
+			})
 		}
 	}
 
@@ -652,6 +749,15 @@ func (m *Module) mergeFile(file *File) hcl.Diagnostics {
 			Severity: hcl.DiagError,
 			Summary:  "Cannot override 'import' blocks",
 			Detail:   "Import blocks can appear only in normal files, not in override files.",
+			Subject:  m.DeclRange.Ptr(),
+		})
+	}
+
+	for _, m := range file.Removed {
+		diags = append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Cannot override 'Removed' blocks",
+			Detail:   "Removed blocks can appear only in normal files, not in override files.",
 			Subject:  m.DeclRange.Ptr(),
 		})
 	}

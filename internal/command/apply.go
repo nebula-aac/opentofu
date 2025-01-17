@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -10,11 +12,12 @@ import (
 	"github.com/opentofu/opentofu/internal/backend"
 	"github.com/opentofu/opentofu/internal/command/arguments"
 	"github.com/opentofu/opentofu/internal/command/views"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/plans/planfile"
 	"github.com/opentofu/opentofu/internal/tfdiags"
 )
 
-// ApplyCommand is a Command implementation that applies a Terraform
+// ApplyCommand is a Command implementation that applies a OpenTofu
 // configuration and actually builds or changes infrastructure.
 type ApplyCommand struct {
 	Meta
@@ -26,6 +29,7 @@ type ApplyCommand struct {
 
 func (c *ApplyCommand) Run(rawArgs []string) int {
 	var diags tfdiags.Diagnostics
+	ctx := c.CommandContext()
 
 	// Parse and apply global view arguments
 	common, rawArgs := arguments.ParseView(rawArgs)
@@ -46,6 +50,8 @@ func (c *ApplyCommand) Run(rawArgs []string) int {
 		args, diags = arguments.ParseApply(rawArgs)
 	}
 
+	c.View.SetShowSensitive(args.ShowSensitive)
+
 	// Instantiate the view, even if there are flag errors, so that we render
 	// diagnostics according to the desired view
 	view := views.NewApply(args.ViewType, c.Destroy, c.View)
@@ -64,8 +70,19 @@ func (c *ApplyCommand) Run(rawArgs []string) int {
 		return 1
 	}
 
+	// Inject variables from args into meta for static evaluation
+	c.GatherVariables(args.Vars)
+
+	// Load the encryption configuration
+	enc, encDiags := c.Encryption()
+	diags = diags.Append(encDiags)
+	if encDiags.HasErrors() {
+		view.Diagnostics(diags)
+		return 1
+	}
+
 	// Attempt to load the plan file, if specified
-	planFile, diags := c.LoadPlanFile(args.PlanPath)
+	planFile, diags := c.LoadPlanFile(args.PlanPath, enc)
 	if diags.HasErrors() {
 		view.Diagnostics(diags)
 		return 1
@@ -88,7 +105,7 @@ func (c *ApplyCommand) Run(rawArgs []string) int {
 	c.Meta.input = args.InputEnabled
 
 	// FIXME: the -parallelism flag is used to control the concurrency of
-	// Terraform operations. At the moment, this value is used both to
+	// OpenTofu operations. At the moment, this value is used both to
 	// initialize the backend via the ContextOpts field inside CLIOpts, and to
 	// set a largely unused field on the Operation request. Again, there is no
 	// clear path to pass this value down, so we continue to mutate the Meta
@@ -97,7 +114,7 @@ func (c *ApplyCommand) Run(rawArgs []string) int {
 
 	// Prepare the backend, passing the plan file if present, and the
 	// backend-specific arguments
-	be, beDiags := c.PrepareBackend(planFile, args.State, args.ViewType)
+	be, beDiags := c.PrepareBackend(planFile, args.State, args.ViewType, enc.State())
 	diags = diags.Append(beDiags)
 	if diags.HasErrors() {
 		view.Diagnostics(diags)
@@ -105,11 +122,8 @@ func (c *ApplyCommand) Run(rawArgs []string) int {
 	}
 
 	// Build the operation request
-	opReq, opDiags := c.OperationRequest(be, view, args.ViewType, planFile, args.Operation, args.AutoApprove)
+	opReq, opDiags := c.OperationRequest(be, view, args.ViewType, planFile, args.Operation, args.AutoApprove, enc)
 	diags = diags.Append(opDiags)
-
-	// Collect variable value and add them to the operation request
-	diags = diags.Append(c.GatherVariables(opReq, args.Vars))
 
 	// Before we delegate to the backend, we'll print any warning diagnostics
 	// we've accumulated here, since the backend will start fresh with its own
@@ -121,10 +135,9 @@ func (c *ApplyCommand) Run(rawArgs []string) int {
 	diags = nil
 
 	// Run the operation
-	op, err := c.RunOperation(be, opReq)
-	if err != nil {
-		diags = diags.Append(err)
-		view.Diagnostics(diags)
+	op, diags := c.RunOperation(ctx, be, opReq)
+	view.Diagnostics(diags)
+	if diags.HasErrors() {
 		return 1
 	}
 
@@ -133,7 +146,7 @@ func (c *ApplyCommand) Run(rawArgs []string) int {
 	}
 
 	// Render the resource count and outputs, unless those counts are being
-	// rendered already in a remote Terraform process.
+	// rendered already in a remote OpenTofu process.
 	if rb, isRemoteBackend := be.(BackendWithRemoteTerraformVersion); !isRemoteBackend || rb.IsLocalOperations() {
 		view.ResourceCount(args.State.StateOutPath)
 		if !c.Destroy && op.State != nil {
@@ -150,14 +163,14 @@ func (c *ApplyCommand) Run(rawArgs []string) int {
 	return 0
 }
 
-func (c *ApplyCommand) LoadPlanFile(path string) (*planfile.WrappedPlanFile, tfdiags.Diagnostics) {
+func (c *ApplyCommand) LoadPlanFile(path string, enc encryption.Encryption) (*planfile.WrappedPlanFile, tfdiags.Diagnostics) {
 	var planFile *planfile.WrappedPlanFile
 	var diags tfdiags.Diagnostics
 
 	// Try to load plan if path is specified
 	if path != "" {
 		var err error
-		planFile, err = c.PlanFile(path)
+		planFile, err = c.PlanFile(path, enc.Plan())
 		if err != nil {
 			diags = diags.Append(tfdiags.Sourceless(
 				tfdiags.Error,
@@ -194,7 +207,7 @@ func (c *ApplyCommand) LoadPlanFile(path string) (*planfile.WrappedPlanFile, tfd
 	return planFile, diags
 }
 
-func (c *ApplyCommand) PrepareBackend(planFile *planfile.WrappedPlanFile, args *arguments.State, viewType arguments.ViewType) (backend.Enhanced, tfdiags.Diagnostics) {
+func (c *ApplyCommand) PrepareBackend(planFile *planfile.WrappedPlanFile, args *arguments.State, viewType arguments.ViewType, enc encryption.StateEncryption) (backend.Enhanced, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 
 	// FIXME: we need to apply the state arguments to the meta object here
@@ -225,7 +238,7 @@ func (c *ApplyCommand) PrepareBackend(planFile *planfile.WrappedPlanFile, args *
 			))
 			return nil, diags
 		}
-		be, beDiags = c.BackendForLocalPlan(plan.Backend)
+		be, beDiags = c.BackendForLocalPlan(plan.Backend, enc)
 	} else {
 		// Both new plans and saved cloud plans load their backend from config.
 		backendConfig, configDiags := c.loadBackendConfig(".")
@@ -237,7 +250,7 @@ func (c *ApplyCommand) PrepareBackend(planFile *planfile.WrappedPlanFile, args *
 		be, beDiags = c.Backend(&BackendOpts{
 			Config:   backendConfig,
 			ViewType: viewType,
-		})
+		}, enc)
 	}
 
 	diags = diags.Append(beDiags)
@@ -254,6 +267,7 @@ func (c *ApplyCommand) OperationRequest(
 	planFile *planfile.WrappedPlanFile,
 	args *arguments.Operation,
 	autoApprove bool,
+	enc encryption.Encryption,
 ) (*backend.Operation, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 
@@ -263,7 +277,7 @@ func (c *ApplyCommand) OperationRequest(
 	diags = diags.Append(c.providerDevOverrideRuntimeWarnings())
 
 	// Build the operation
-	opReq := c.Operation(be, viewType)
+	opReq := c.Operation(be, viewType, enc)
 	opReq.AutoApprove = autoApprove
 	opReq.ConfigDir = "."
 	opReq.PlanMode = args.PlanMode
@@ -271,6 +285,7 @@ func (c *ApplyCommand) OperationRequest(
 	opReq.PlanFile = planFile
 	opReq.PlanRefresh = args.Refresh
 	opReq.Targets = args.Targets
+	opReq.Excludes = args.Excludes
 	opReq.ForceReplace = args.ForceReplace
 	opReq.Type = backend.OperationTypeApply
 	opReq.View = view.Operation()
@@ -285,11 +300,9 @@ func (c *ApplyCommand) OperationRequest(
 	return opReq, diags
 }
 
-func (c *ApplyCommand) GatherVariables(opReq *backend.Operation, args *arguments.Vars) tfdiags.Diagnostics {
-	var diags tfdiags.Diagnostics
-
+func (c *ApplyCommand) GatherVariables(args *arguments.Vars) {
 	// FIXME the arguments package currently trivially gathers variable related
-	// arguments in a heterogenous slice, in order to minimize the number of
+	// arguments in a heterogeneous slice, in order to minimize the number of
 	// code paths gathering variables during the transition to this structure.
 	// Once all commands that gather variables have been converted to this
 	// structure, we could move the variable gathering code to the arguments
@@ -302,9 +315,6 @@ func (c *ApplyCommand) GatherVariables(opReq *backend.Operation, args *arguments
 		items[i].Value = varArgs[i].Value
 	}
 	c.Meta.variableArgs = rawFlags{items: &items}
-	opReq.Variables, diags = c.collectVariableValues()
-
-	return diags
 }
 
 func (c *ApplyCommand) Help() string {
@@ -348,6 +358,14 @@ Options:
                          accompanied by errors, show them in a more compact
                          form that includes only the summary messages.
 
+  -consolidate-warnings  If OpenTofu produces any warnings, no consolodation
+                         will be performed. All locations, for all warnings
+                         will be listed. Enabled by default.
+
+  -consolidate-errors    If OpenTofu produces any errors, no consolodation
+                         will be performed. All locations, for all errors
+                         will be listed. Disabled by default
+
   -destroy               Destroy OpenTofu-managed infrastructure.
                          The command "tofu destroy" is a convenience alias
                          for this option.
@@ -371,6 +389,12 @@ Options:
   -state-out=path        Path to write state to that is different than
                          "-state". This can be used to preserve the old
                          state.
+
+  -show-sensitive        If specified, sensitive values will be displayed.
+
+  -json                  Produce output in a machine-readable JSON format,
+                         suitable for use in text editor integrations and 
+                         other automated systems. Always disables color.
 
   If you don't provide a saved plan file then this command will also accept
   all of the plan-customization options accepted by the tofu plan command.

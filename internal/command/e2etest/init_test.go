@@ -1,10 +1,13 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package e2etest
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,7 +23,7 @@ import (
 func TestInitProviders(t *testing.T) {
 	t.Parallel()
 
-	// This test reaches out to releases.hashicorp.com to download the
+	// This test reaches out to registry.opentofu.org to download the
 	// template provider, so it can only run if network access is allowed.
 	// We intentionally don't try to stub this here, because there's already
 	// a stubbed version of this in the "command" package and so the goal here
@@ -28,7 +31,7 @@ func TestInitProviders(t *testing.T) {
 	skipIfCannotAccessNetwork(t)
 
 	fixturePath := filepath.Join("testdata", "template-provider")
-	tf := e2e.NewBinary(t, terraformBin, fixturePath)
+	tf := e2e.NewBinary(t, tofuBin, fixturePath)
 
 	stdout, stderr, err := tf.Run("init")
 	if err != nil {
@@ -60,33 +63,67 @@ func TestInitProvidersInternal(t *testing.T) {
 	// This test should _not_ reach out anywhere because the "terraform"
 	// provider is internal to the core tofu binary.
 
-	fixturePath := filepath.Join("testdata", "tf-provider")
-	tf := e2e.NewBinary(t, terraformBin, fixturePath)
+	t.Run("output in human readable format", func(t *testing.T) {
+		fixturePath := filepath.Join("testdata", "tf-provider")
+		tf := e2e.NewBinary(t, tofuBin, fixturePath)
 
-	stdout, stderr, err := tf.Run("init")
-	if err != nil {
-		t.Errorf("unexpected error: %s", err)
-	}
+		stdout, stderr, err := tf.Run("init")
+		if err != nil {
+			t.Errorf("unexpected error: %s", err)
+		}
 
-	if stderr != "" {
-		t.Errorf("unexpected stderr output:\n%s", stderr)
-	}
+		if stderr != "" {
+			t.Errorf("unexpected stderr output:\n%s", stderr)
+		}
 
-	if !strings.Contains(stdout, "OpenTofu has been successfully initialized!") {
-		t.Errorf("success message is missing from output:\n%s", stdout)
-	}
+		if !strings.Contains(stdout, "OpenTofu has been successfully initialized!") {
+			t.Errorf("success message is missing from output:\n%s", stdout)
+		}
 
-	if strings.Contains(stdout, "Installing hashicorp/terraform") {
-		// Shouldn't have downloaded anything with this config, because the
-		// provider is built in.
-		t.Errorf("provider download message appeared in output:\n%s", stdout)
-	}
+		if strings.Contains(stdout, "Installing hashicorp/terraform") {
+			// Shouldn't have downloaded anything with this config, because the
+			// provider is built in.
+			t.Errorf("provider download message appeared in output:\n%s", stdout)
+		}
 
-	if strings.Contains(stdout, "Installing terraform.io/builtin/terraform") {
-		// Shouldn't have downloaded anything with this config, because the
-		// provider is built in.
-		t.Errorf("provider download message appeared in output:\n%s", stdout)
-	}
+		if strings.Contains(stdout, "Installing terraform.io/builtin/terraform") {
+			// Shouldn't have downloaded anything with this config, because the
+			// provider is built in.
+			t.Errorf("provider download message appeared in output:\n%s", stdout)
+		}
+	})
+
+	t.Run("output in machine readable format", func(t *testing.T) {
+		fixturePath := filepath.Join("testdata", "tf-provider")
+		tf := e2e.NewBinary(t, tofuBin, fixturePath)
+
+		stdout, stderr, err := tf.Run("init", "-json")
+		if err != nil {
+			t.Errorf("unexpected error: %s", err)
+		}
+
+		if stderr != "" {
+			t.Errorf("unexpected stderr output:\n%s", stderr)
+		}
+
+		// we can not check timestamp, so the sub string is not a valid json object
+		if !strings.Contains(stdout, `{"@level":"info","@message":"OpenTofu has been successfully initialized!","@module":"tofu.ui"`) {
+			t.Errorf("success message is missing from output:\n%s", stdout)
+		}
+
+		if strings.Contains(stdout, "Installing hashicorp/terraform") {
+			// Shouldn't have downloaded anything with this config, because the
+			// provider is built in.
+			t.Errorf("provider download message appeared in output:\n%s", stdout)
+		}
+
+		if strings.Contains(stdout, "Installing terraform.io/builtin/terraform") {
+			// Shouldn't have downloaded anything with this config, because the
+			// provider is built in.
+			t.Errorf("provider download message appeared in output:\n%s", stdout)
+		}
+	})
+
 }
 
 func TestInitProvidersVendored(t *testing.T) {
@@ -100,7 +137,7 @@ func TestInitProvidersVendored(t *testing.T) {
 	skipIfCannotAccessNetwork(t)
 
 	fixturePath := filepath.Join("testdata", "vendored-provider")
-	tf := e2e.NewBinary(t, terraformBin, fixturePath)
+	tf := e2e.NewBinary(t, tofuBin, fixturePath)
 
 	// Our fixture dir has a generic os_arch dir, which we need to customize
 	// to the actual OS/arch where this test is running in order to get the
@@ -142,42 +179,85 @@ func TestInitProvidersLocalOnly(t *testing.T) {
 	// to the host "example.com", which is the placeholder domain we use in
 	// the test fixture.)
 
-	fixturePath := filepath.Join("testdata", "local-only-provider")
-	tf := e2e.NewBinary(t, terraformBin, fixturePath)
-	// If you run this test on a workstation with a plugin-cache directory
-	// configured, it will leave a bad directory behind and tofu init will
-	// not work until you remove it.
-	//
-	// To avoid this, we will  "zero out" any existing cli config file.
-	tf.AddEnv("TF_CLI_CONFIG_FILE=")
+	t.Run("output in human readable format", func(t *testing.T) {
+		fixturePath := filepath.Join("testdata", "local-only-provider")
+		tf := e2e.NewBinary(t, tofuBin, fixturePath)
+		// If you run this test on a workstation with a plugin-cache directory
+		// configured, it will leave a bad directory behind and tofu init will
+		// not work until you remove it.
+		//
+		// To avoid this, we will  "zero out" any existing cli config file.
+		tf.AddEnv("TF_CLI_CONFIG_FILE=")
 
-	// Our fixture dir has a generic os_arch dir, which we need to customize
-	// to the actual OS/arch where this test is running in order to get the
-	// desired result.
-	fixtMachineDir := tf.Path("terraform.d/plugins/example.com/awesomecorp/happycloud/1.2.0/os_arch")
-	wantMachineDir := tf.Path("terraform.d/plugins/example.com/awesomecorp/happycloud/1.2.0/", fmt.Sprintf("%s_%s", runtime.GOOS, runtime.GOARCH))
-	err := os.Rename(fixtMachineDir, wantMachineDir)
-	if err != nil {
-		t.Fatalf("unexpected error: %s", err)
-	}
+		// Our fixture dir has a generic os_arch dir, which we need to customize
+		// to the actual OS/arch where this test is running in order to get the
+		// desired result.
+		fixtMachineDir := tf.Path("terraform.d/plugins/example.com/awesomecorp/happycloud/1.2.0/os_arch")
+		wantMachineDir := tf.Path("terraform.d/plugins/example.com/awesomecorp/happycloud/1.2.0/", fmt.Sprintf("%s_%s", runtime.GOOS, runtime.GOARCH))
+		err := os.Rename(fixtMachineDir, wantMachineDir)
+		if err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
 
-	stdout, stderr, err := tf.Run("init")
-	if err != nil {
-		t.Errorf("unexpected error: %s", err)
-	}
+		stdout, stderr, err := tf.Run("init")
+		if err != nil {
+			t.Errorf("unexpected error: %s", err)
+		}
 
-	if stderr != "" {
-		t.Errorf("unexpected stderr output:\n%s", stderr)
-	}
+		if stderr != "" {
+			t.Errorf("unexpected stderr output:\n%s", stderr)
+		}
 
-	if !strings.Contains(stdout, "OpenTofu has been successfully initialized!") {
-		t.Errorf("success message is missing from output:\n%s", stdout)
-	}
+		if !strings.Contains(stdout, "OpenTofu has been successfully initialized!") {
+			t.Errorf("success message is missing from output:\n%s", stdout)
+		}
 
-	if !strings.Contains(stdout, "- Installing example.com/awesomecorp/happycloud v1.2.0") {
-		t.Errorf("provider download message is missing from output:\n%s", stdout)
-		t.Logf("(this can happen if you have a conflicting copy of the plugin in one of the global plugin search dirs)")
-	}
+		if !strings.Contains(stdout, "- Installing example.com/awesomecorp/happycloud v1.2.0") {
+			t.Errorf("provider download message is missing from output:\n%s", stdout)
+			t.Logf("(this can happen if you have a conflicting copy of the plugin in one of the global plugin search dirs)")
+		}
+	})
+
+	t.Run("output in machine readable format", func(t *testing.T) {
+		fixturePath := filepath.Join("testdata", "local-only-provider")
+		tf := e2e.NewBinary(t, tofuBin, fixturePath)
+		// If you run this test on a workstation with a plugin-cache directory
+		// configured, it will leave a bad directory behind and tofu init will
+		// not work until you remove it.
+		//
+		// To avoid this, we will  "zero out" any existing cli config file.
+		tf.AddEnv("TF_CLI_CONFIG_FILE=")
+
+		// Our fixture dir has a generic os_arch dir, which we need to customize
+		// to the actual OS/arch where this test is running in order to get the
+		// desired result.
+		fixtMachineDir := tf.Path("terraform.d/plugins/example.com/awesomecorp/happycloud/1.2.0/os_arch")
+		wantMachineDir := tf.Path("terraform.d/plugins/example.com/awesomecorp/happycloud/1.2.0/", fmt.Sprintf("%s_%s", runtime.GOOS, runtime.GOARCH))
+		err := os.Rename(fixtMachineDir, wantMachineDir)
+		if err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+
+		stdout, stderr, err := tf.Run("init", "-json")
+		if err != nil {
+			t.Errorf("unexpected error: %s", err)
+		}
+
+		if stderr != "" {
+			t.Errorf("unexpected stderr output:\n%s", stderr)
+		}
+
+		// we can not check timestamp, so the sub string is not a valid json object
+		if !strings.Contains(stdout, `{"@level":"info","@message":"OpenTofu has been successfully initialized!","@module":"tofu.ui"`) {
+			t.Errorf("success message is missing from output:\n%s", stdout)
+		}
+
+		if !strings.Contains(stdout, `{"@level":"info","@message":"- Installing example.com/awesomecorp/happycloud v1.2.0...","@module":"tofu.ui"`) {
+			t.Errorf("provider download message is missing from output:\n%s", stdout)
+			t.Logf("(this can happen if you have a conflicting copy of the plugin in one of the global plugin search dirs)")
+		}
+	})
+
 }
 
 func TestInitProvidersCustomMethod(t *testing.T) {
@@ -193,7 +273,7 @@ func TestInitProvidersCustomMethod(t *testing.T) {
 	for _, configFile := range []string{"cliconfig.tfrc", "cliconfig.tfrc.json"} {
 		t.Run(configFile, func(t *testing.T) {
 			fixturePath := filepath.Join("testdata", "custom-provider-install-method")
-			tf := e2e.NewBinary(t, terraformBin, fixturePath)
+			tf := e2e.NewBinary(t, tofuBin, fixturePath)
 
 			// Our fixture dir has a generic os_arch dir, which we need to customize
 			// to the actual OS/arch where this test is running in order to get the
@@ -232,13 +312,13 @@ func TestInitProvidersCustomMethod(t *testing.T) {
 func TestInitProviders_pluginCache(t *testing.T) {
 	t.Parallel()
 
-	// This test reaches out to releases.hashicorp.com to access plugin
+	// This test reaches out to registry.opentofu.org to access plugin
 	// metadata, and download the null plugin, though the template plugin
 	// should come from local cache.
 	skipIfCannotAccessNetwork(t)
 
 	fixturePath := filepath.Join("testdata", "plugin-cache")
-	tf := e2e.NewBinary(t, terraformBin, fixturePath)
+	tf := e2e.NewBinary(t, tofuBin, fixturePath)
 
 	// Our fixture dir has a generic os_arch dir, which we need to customize
 	// to the actual OS/arch where this test is running in order to get the
@@ -294,7 +374,7 @@ func TestInit_fromModule(t *testing.T) {
 	skipIfCannotAccessNetwork(t)
 
 	fixturePath := filepath.Join("testdata", "empty")
-	tf := e2e.NewBinary(t, terraformBin, fixturePath)
+	tf := e2e.NewBinary(t, tofuBin, fixturePath)
 
 	cmd := tf.Cmd("init", "-from-module=hashicorp/vault/aws")
 	cmd.Stdin = nil
@@ -327,7 +407,7 @@ func TestInitProviderNotFound(t *testing.T) {
 	skipIfCannotAccessNetwork(t)
 
 	fixturePath := filepath.Join("testdata", "provider-not-found")
-	tf := e2e.NewBinary(t, terraformBin, fixturePath)
+	tf := e2e.NewBinary(t, tofuBin, fixturePath)
 
 	t.Run("registry provider not found", func(t *testing.T) {
 		_, stderr, err := tf.Run("init", "-no-color")
@@ -345,9 +425,21 @@ func TestInitProviderNotFound(t *testing.T) {
 		}
 	})
 
+	t.Run("registry provider not found output in json format", func(t *testing.T) {
+		stdout, _, err := tf.Run("init", "-no-color", "-json")
+		if err == nil {
+			t.Fatal("expected error, got success")
+		}
+
+		oneLineStdout := strings.ReplaceAll(stdout, "\n", " ")
+		if !strings.Contains(oneLineStdout, `"diagnostic":{"severity":"error","summary":"Failed to query available provider packages","detail":"Could not retrieve the list of available versions for provider hashicorp/nonexist: provider registry registry.opentofu.org does not have a provider named registry.opentofu.org/hashicorp/nonexist\n\nAll modules should specify their required_providers so that external consumers will get the correct providers when using a module. To see which modules are currently depending on hashicorp/nonexist, run the following command:\n    tofu providers\n\nIf you believe this provider is missing from the registry, please submit a issue on the OpenTofu Registry https://github.com/opentofu/registry/issues/new/choose"},"type":"diagnostic"}`) {
+			t.Errorf("expected error message is missing from output:\n%s", stdout)
+		}
+	})
+
 	t.Run("local provider not found", func(t *testing.T) {
 		// The -plugin-dir directory must exist for the provider installer to search it.
-		pluginDir := tf.Path("empty")
+		pluginDir := tf.Path("empty-for-json")
 		if err := os.Mkdir(pluginDir, os.ModePerm); err != nil {
 			t.Fatal(err)
 		}
@@ -359,6 +451,25 @@ func TestInitProviderNotFound(t *testing.T) {
 
 		if !strings.Contains(stderr, "provider registry.opentofu.org/hashicorp/nonexist was not\nfound in any of the search locations\n\n  - "+pluginDir) {
 			t.Errorf("expected error message is missing from output:\n%s", stderr)
+		}
+	})
+
+	t.Run("local provider not found output in json format", func(t *testing.T) {
+		// The -plugin-dir directory must exist for the provider installer to search it.
+		pluginDir := tf.Path("empty")
+		if err := os.Mkdir(pluginDir, os.ModePerm); err != nil {
+			t.Fatal(err)
+		}
+
+		stdout, _, err := tf.Run("init", "-no-color", "-plugin-dir="+pluginDir, "-json")
+		if err == nil {
+			t.Fatal("expected error, got success")
+		}
+
+		escapedPluginDir := escapeStringJSON(pluginDir)
+
+		if !strings.Contains(stdout, `"diagnostic":{"severity":"error","summary":"Failed to query available provider packages","detail":"Could not retrieve the list of available versions for provider hashicorp/nonexist: provider registry.opentofu.org/hashicorp/nonexist was not found in any of the search locations\n\n  - `+escapedPluginDir+`"},"type":"diagnostic"}`) {
+			t.Errorf("expected error message is missing from output (pluginDir = '%s'):\n%s", escapedPluginDir, stdout)
 		}
 	})
 
@@ -380,6 +491,10 @@ func TestInitProviderNotFound(t *testing.T) {
 │ modules are currently depending on hashicorp/nonexist, run the following
 │ command:
 │     tofu providers
+│ 
+│ If you believe this provider is missing from the registry, please submit a
+│ issue on the OpenTofu Registry
+│ https://github.com/opentofu/registry/issues/new/choose
 ╵
 
 `
@@ -399,7 +514,7 @@ func TestInitProviderNotFound(t *testing.T) {
 //	skipIfCannotAccessNetwork(t)
 //
 //	fixturePath := filepath.Join("testdata", "provider-warnings")
-//	tf := e2e.NewBinary(t, terraformBin, fixturePath)
+//	tf := e2e.NewBinary(t, tofuBin, fixturePath)
 //
 //	stdout, _, err := tf.Run("init")
 //	if err == nil {
@@ -411,3 +526,24 @@ func TestInitProviderNotFound(t *testing.T) {
 //	}
 //
 //}
+
+func escapeStringJSON(v string) string {
+	b := &strings.Builder{}
+
+	enc := json.NewEncoder(b)
+
+	enc.SetEscapeHTML(false)
+
+	if err := enc.Encode(v); err != nil {
+		panic("failed to escapeStringJSON: " + v)
+	}
+
+	marshaledV := b.String()
+
+	// shouldn't happen
+	if len(marshaledV) < 2 {
+		return string(marshaledV)
+	}
+
+	return string(marshaledV[1 : len(marshaledV)-2])
+}

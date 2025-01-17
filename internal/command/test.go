@@ -1,6 +1,12 @@
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package command
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -18,10 +24,12 @@ import (
 	"github.com/opentofu/opentofu/internal/command/arguments"
 	"github.com/opentofu/opentofu/internal/command/views"
 	"github.com/opentofu/opentofu/internal/configs"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/logging"
 	"github.com/opentofu/opentofu/internal/moduletest"
 	"github.com/opentofu/opentofu/internal/plans"
 	"github.com/opentofu/opentofu/internal/states"
+	"github.com/opentofu/opentofu/internal/states/statefile"
 	"github.com/opentofu/opentofu/internal/tfdiags"
 	"github.com/opentofu/opentofu/internal/tofu"
 )
@@ -52,6 +60,18 @@ Usage: tofu [global options] test [options]
 
 Options:
 
+  -compact-warnings     If OpenTofu produces any warnings that are not
+                        accompanied by errors, show them in a more compact
+                        form that includes only the summary messages.
+
+  -consolidate-warnings If OpenTofu produces any warnings, no consolodation
+                        will be performed. All locations, for all warnings
+                        will be listed. Enabled by default.
+
+  -consolidate-errors   If OpenTofu produces any errors, no consolodation
+                        will be performed. All locations, for all errors
+                        will be listed. Disabled by default
+
   -filter=testfile      If specified, OpenTofu will only execute the test files
                         specified by this flag. You can use this option multiple
                         times to execute more than one test file.
@@ -76,6 +96,15 @@ Options:
 
   -verbose              Print the plan or state for each test run block as it
                         executes.
+
+  -var 'foo=bar'        Set a value for one of the input variables in the root
+                        module of the configuration. Use this option more than
+                        once to set more than one variable.
+
+  -var-file=filename    Load variable values from the given file, in addition
+                        to the default files terraform.tfvars and *.auto.tfvars.
+                        Use this option more than once to include more than one
+                        variables file.
 `
 	return strings.TrimSpace(helpText)
 }
@@ -86,6 +115,7 @@ func (c *TestCommand) Synopsis() string {
 
 func (c *TestCommand) Run(rawArgs []string) int {
 	var diags tfdiags.Diagnostics
+	ctx := c.CommandContext()
 
 	common, rawArgs := arguments.ParseView(rawArgs)
 	c.View.Configure(common)
@@ -98,6 +128,24 @@ func (c *TestCommand) Run(rawArgs []string) int {
 	}
 
 	view := views.NewTest(args.ViewType, c.View)
+
+	// Users can also specify variables via the command line, so we'll parse
+	// all that here.
+	var items []rawFlag
+	for _, variable := range args.Vars.All() {
+		items = append(items, rawFlag{
+			Name:  variable.Name,
+			Value: variable.Value,
+		})
+	}
+	c.variableArgs = rawFlags{items: &items}
+
+	variables, variableDiags := c.collectVariableValuesWithTests(args.TestDirectory)
+	diags = diags.Append(variableDiags)
+	if variableDiags.HasErrors() {
+		view.Diagnostics(nil, nil, diags)
+		return 1
+	}
 
 	config, configDiags := c.loadConfigWithTests(".", args.TestDirectory)
 	diags = diags.Append(configDiags)
@@ -182,30 +230,15 @@ func (c *TestCommand) Run(rawArgs []string) int {
 		return 1
 	}
 
-	// Users can also specify variables via the command line, so we'll parse
-	// all that here.
-	var items []rawFlag
-	for _, variable := range args.Vars.All() {
-		items = append(items, rawFlag{
-			Name:  variable.Name,
-			Value: variable.Value,
-		})
-	}
-	c.variableArgs = rawFlags{items: &items}
-
-	variables, variableDiags := c.collectVariableValues()
-	diags = diags.Append(variableDiags)
-	if variableDiags.HasErrors() {
-		view.Diagnostics(nil, nil, diags)
-		return 1
-	}
-
 	opts, err := c.contextOpts()
 	if err != nil {
 		diags = diags.Append(err)
 		view.Diagnostics(nil, nil, diags)
 		return 1
 	}
+
+	// Don't use encryption during testing
+	opts.Encryption = encryption.Disabled()
 
 	// Print out all the diagnostics we have from the setup. These will just be
 	// warnings, and we want them out of the way before we start the actual
@@ -220,9 +253,9 @@ func (c *TestCommand) Run(rawArgs []string) int {
 	// if we're halfway through a test. We'll print details explaining what was
 	// stopped so the user can do their best to recover from it.
 
-	runningCtx, done := context.WithCancel(context.Background())
+	runningCtx, done := context.WithCancel(context.WithoutCancel(ctx))
 	stopCtx, stop := context.WithCancel(runningCtx)
-	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancelCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
 	runner := &TestSuiteRunner{
 		command: c,
@@ -247,13 +280,14 @@ func (c *TestCommand) Run(rawArgs []string) int {
 
 	view.Abstract(&suite)
 
+	panicHandler := logging.PanicHandlerWithTraceFn()
 	go func() {
-		defer logging.PanicHandler()
+		defer panicHandler()
 		defer done()
 		defer stop()
 		defer cancel()
 
-		runner.Start(variables)
+		runner.Start(ctx)
 	}()
 
 	// Wait for the operation to complete, or for an interrupt to occur.
@@ -325,7 +359,7 @@ type TestSuiteRunner struct {
 	Stopped   bool
 	Cancelled bool
 
-	// StoppedCtx and CancelledCtx allow in progress Terraform operations to
+	// StoppedCtx and CancelledCtx allow in progress OpenTofu operations to
 	// respond to external calls from the test command.
 	StoppedCtx   context.Context
 	CancelledCtx context.Context
@@ -334,7 +368,7 @@ type TestSuiteRunner struct {
 	Verbose bool
 }
 
-func (runner *TestSuiteRunner) Start(globals map[string]backend.UnparsedVariableValue) {
+func (runner *TestSuiteRunner) Start(ctx context.Context) {
 	var files []string
 	for name := range runner.Suite.Files {
 		files = append(files, name)
@@ -359,8 +393,8 @@ func (runner *TestSuiteRunner) Start(globals map[string]backend.UnparsedVariable
 			},
 		}
 
-		fileRunner.ExecuteTestFile(file)
-		fileRunner.Cleanup(file)
+		fileRunner.ExecuteTestFile(ctx, file)
+		fileRunner.Cleanup(ctx, file)
 		runner.Suite.Status = runner.Suite.Status.Merge(file.Status)
 	}
 }
@@ -376,7 +410,7 @@ type TestFileState struct {
 	State *states.State
 }
 
-func (runner *TestFileRunner) ExecuteTestFile(file *moduletest.File) {
+func (runner *TestFileRunner) ExecuteTestFile(ctx context.Context, file *moduletest.File) {
 	log.Printf("[TRACE] TestFileRunner: executing test file %s", file.Name)
 
 	file.Status = file.Status.Merge(moduletest.Pass)
@@ -434,8 +468,28 @@ func (runner *TestFileRunner) ExecuteTestFile(file *moduletest.File) {
 			}
 		}
 
-		state, updatedState := runner.ExecuteTestRun(run, file, runner.States[key].State, config)
+		state, updatedState := runner.ExecuteTestRun(ctx, run, file, runner.States[key].State, config)
 		if updatedState {
+			var err error
+
+			// We need to simulate state serialization between multiple runs
+			// due to its side effects. One of such side effects is removal
+			// of destroyed non-root module outputs. This is not handled
+			// during graph walk since those values are not stored in the
+			// state file. This is more of a weird workaround instead of a
+			// proper fix, unfortunately.
+			state, err = simulateStateSerialization(state)
+			if err != nil {
+				run.Diagnostics = run.Diagnostics.Append(&hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Failure during state serialization",
+					Detail:   err.Error(),
+				})
+
+				// We cannot reuse state later so that's a hard stop.
+				return
+			}
+
 			// Only update the most recent run and state if the state was
 			// actually updated by this change. We want to use the run that
 			// most recently updated the tracked state as the cleanup
@@ -453,7 +507,7 @@ func (runner *TestFileRunner) ExecuteTestFile(file *moduletest.File) {
 	}
 }
 
-func (runner *TestFileRunner) ExecuteTestRun(run *moduletest.Run, file *moduletest.File, state *states.State, config *configs.Config) (*states.State, bool) {
+func (runner *TestFileRunner) ExecuteTestRun(ctx context.Context, run *moduletest.Run, file *moduletest.File, state *states.State, config *configs.Config) (*states.State, bool) {
 	log.Printf("[TRACE] TestFileRunner: executing run block %s/%s", file.Name, run.Name)
 
 	if runner.Suite.Cancelled {
@@ -466,6 +520,12 @@ func (runner *TestFileRunner) ExecuteTestRun(run *moduletest.Run, file *modulete
 	if runner.Suite.Stopped {
 		// Basically the same as above, except we'll be a bit nicer.
 		run.Status = moduletest.Skip
+		return state, false
+	}
+
+	run.Diagnostics = run.Diagnostics.Append(file.Config.Validate())
+	if run.Diagnostics.HasErrors() {
+		run.Status = moduletest.Error
 		return state, false
 	}
 
@@ -484,24 +544,25 @@ func (runner *TestFileRunner) ExecuteTestRun(run *moduletest.Run, file *modulete
 		return state, false
 	}
 
-	validateDiags := runner.validate(config, run, file)
+	validateDiags := runner.validate(ctx, config, run, file)
 	run.Diagnostics = run.Diagnostics.Append(validateDiags)
 	if validateDiags.HasErrors() {
 		run.Status = moduletest.Error
 		return state, false
 	}
 
-	planCtx, plan, planDiags := runner.plan(config, state, run, file)
+	planCtx, plan, planDiags := runner.plan(ctx, config, state, run, file)
 	if run.Config.Command == configs.PlanTestCommand {
+		expectedFailures, sourceRanges := run.BuildExpectedFailuresAndSourceMaps()
 		// Then we want to assess our conditions and diagnostics differently.
-		planDiags = run.ValidateExpectedFailures(planDiags)
+		planDiags = run.ValidateExpectedFailures(expectedFailures, sourceRanges, planDiags)
 		run.Diagnostics = run.Diagnostics.Append(planDiags)
 		if planDiags.HasErrors() {
 			run.Status = moduletest.Error
 			return state, false
 		}
 
-		variables, resetVariables, variableDiags := prepareInputVariablesForAssertions(config, run, file, runner.Suite.GlobalVariables)
+		variables, resetVariables, variableDiags := runner.prepareInputVariablesForAssertions(config, run, file, runner.Suite.GlobalVariables)
 		defer resetVariables()
 
 		run.Diagnostics = run.Diagnostics.Append(variableDiags)
@@ -539,6 +600,10 @@ func (runner *TestFileRunner) ExecuteTestRun(run *moduletest.Run, file *modulete
 		return state, false
 	}
 
+	expectedFailures, sourceRanges := run.BuildExpectedFailuresAndSourceMaps()
+
+	planDiags = checkProblematicPlanErrors(expectedFailures, planDiags)
+
 	// Otherwise any error during the planning prevents our apply from
 	// continuing which is an error.
 	run.Diagnostics = run.Diagnostics.Append(planDiags)
@@ -561,10 +626,10 @@ func (runner *TestFileRunner) ExecuteTestRun(run *moduletest.Run, file *modulete
 	}
 	run.Diagnostics = filteredDiags
 
-	applyCtx, updated, applyDiags := runner.apply(plan, state, config, run, file)
+	applyCtx, updated, applyDiags := runner.apply(ctx, plan, state, config, run, file)
 
 	// Remove expected diagnostics, and add diagnostics in case anything that should have failed didn't.
-	applyDiags = run.ValidateExpectedFailures(applyDiags)
+	applyDiags = run.ValidateExpectedFailures(expectedFailures, sourceRanges, applyDiags)
 
 	run.Diagnostics = run.Diagnostics.Append(applyDiags)
 	if applyDiags.HasErrors() {
@@ -574,7 +639,7 @@ func (runner *TestFileRunner) ExecuteTestRun(run *moduletest.Run, file *modulete
 		return updated, true
 	}
 
-	variables, resetVariables, variableDiags := prepareInputVariablesForAssertions(config, run, file, runner.Suite.GlobalVariables)
+	variables, resetVariables, variableDiags := runner.prepareInputVariablesForAssertions(config, run, file, runner.Suite.GlobalVariables)
 	defer resetVariables()
 
 	run.Diagnostics = run.Diagnostics.Append(variableDiags)
@@ -612,7 +677,7 @@ func (runner *TestFileRunner) ExecuteTestRun(run *moduletest.Run, file *modulete
 	return updated, true
 }
 
-func (runner *TestFileRunner) validate(config *configs.Config, run *moduletest.Run, file *moduletest.File) tfdiags.Diagnostics {
+func (runner *TestFileRunner) validate(ctx context.Context, config *configs.Config, run *moduletest.Run, file *moduletest.File) tfdiags.Diagnostics {
 	log.Printf("[TRACE] TestFileRunner: called validate for %s/%s", file.Name, run.Name)
 
 	var diags tfdiags.Diagnostics
@@ -623,15 +688,16 @@ func (runner *TestFileRunner) validate(config *configs.Config, run *moduletest.R
 		return diags
 	}
 
-	runningCtx, done := context.WithCancel(context.Background())
+	runningCtx, done := context.WithCancel(context.WithoutCancel(ctx))
 
 	var validateDiags tfdiags.Diagnostics
+	panicHandler := logging.PanicHandlerWithTraceFn()
 	go func() {
-		defer logging.PanicHandler()
+		defer panicHandler()
 		defer done()
 
 		log.Printf("[DEBUG] TestFileRunner: starting validate for %s/%s", file.Name, run.Name)
-		validateDiags = tfCtx.Validate(config)
+		validateDiags = tfCtx.Validate(ctx, config)
 		log.Printf("[DEBUG] TestFileRunner: completed validate for  %s/%s", file.Name, run.Name)
 	}()
 	waitDiags, cancelled := runner.wait(tfCtx, runningCtx, run, file, nil)
@@ -646,8 +712,7 @@ func (runner *TestFileRunner) validate(config *configs.Config, run *moduletest.R
 	return diags
 }
 
-func (runner *TestFileRunner) destroy(config *configs.Config, state *states.State, run *moduletest.Run, file *moduletest.File) (*states.State, tfdiags.Diagnostics) {
-
+func (runner *TestFileRunner) destroy(ctx context.Context, config *configs.Config, state *states.State, run *moduletest.Run, file *moduletest.File) (*states.State, tfdiags.Diagnostics) {
 	log.Printf("[TRACE] TestFileRunner: called destroy for %s/%s", file.Name, run.Name)
 
 	if state.Empty() {
@@ -657,7 +722,10 @@ func (runner *TestFileRunner) destroy(config *configs.Config, state *states.Stat
 
 	var diags tfdiags.Diagnostics
 
-	variables, variableDiags := buildInputVariablesForTest(run, file, config, runner.Suite.GlobalVariables)
+	evalCtx, ctxDiags := getEvalContextForTest(runner.States, config, runner.Suite.GlobalVariables)
+	diags = diags.Append(ctxDiags)
+
+	variables, variableDiags := buildInputVariablesForTest(run, file, config, runner.Suite.GlobalVariables, evalCtx)
 	diags = diags.Append(variableDiags)
 
 	if diags.HasErrors() {
@@ -675,16 +743,17 @@ func (runner *TestFileRunner) destroy(config *configs.Config, state *states.Stat
 		return state, diags
 	}
 
-	runningCtx, done := context.WithCancel(context.Background())
+	runningCtx, done := context.WithCancel(context.WithoutCancel(ctx))
 
 	var plan *plans.Plan
 	var planDiags tfdiags.Diagnostics
+	panicHandler := logging.PanicHandlerWithTraceFn()
 	go func() {
-		defer logging.PanicHandler()
+		defer panicHandler()
 		defer done()
 
 		log.Printf("[DEBUG] TestFileRunner: starting destroy plan for %s/%s", file.Name, run.Name)
-		plan, planDiags = tfCtx.Plan(config, state, planOpts)
+		plan, planDiags = tfCtx.Plan(ctx, config, state, planOpts)
 		log.Printf("[DEBUG] TestFileRunner: completed destroy plan for %s/%s", file.Name, run.Name)
 	}()
 	waitDiags, cancelled := runner.wait(tfCtx, runningCtx, run, file, nil)
@@ -700,12 +769,12 @@ func (runner *TestFileRunner) destroy(config *configs.Config, state *states.Stat
 		return state, diags
 	}
 
-	_, updated, applyDiags := runner.apply(plan, state, config, run, file)
+	_, updated, applyDiags := runner.apply(ctx, plan, state, config, run, file)
 	diags = diags.Append(applyDiags)
 	return updated, diags
 }
 
-func (runner *TestFileRunner) plan(config *configs.Config, state *states.State, run *moduletest.Run, file *moduletest.File) (*tofu.Context, *plans.Plan, tfdiags.Diagnostics) {
+func (runner *TestFileRunner) plan(ctx context.Context, config *configs.Config, state *states.State, run *moduletest.Run, file *moduletest.File) (*tofu.Context, *plans.Plan, tfdiags.Diagnostics) {
 	log.Printf("[TRACE] TestFileRunner: called plan for %s/%s", file.Name, run.Name)
 
 	var diags tfdiags.Diagnostics
@@ -719,7 +788,10 @@ func (runner *TestFileRunner) plan(config *configs.Config, state *states.State, 
 	references, referenceDiags := run.GetReferences()
 	diags = diags.Append(referenceDiags)
 
-	variables, variableDiags := buildInputVariablesForTest(run, file, config, runner.Suite.GlobalVariables)
+	evalCtx, ctxDiags := getEvalContextForTest(runner.States, config, runner.Suite.GlobalVariables)
+	diags = diags.Append(ctxDiags)
+
+	variables, variableDiags := buildInputVariablesForTest(run, file, config, runner.Suite.GlobalVariables, evalCtx)
 	diags = diags.Append(variableDiags)
 
 	if diags.HasErrors() {
@@ -748,16 +820,17 @@ func (runner *TestFileRunner) plan(config *configs.Config, state *states.State, 
 		return nil, nil, diags
 	}
 
-	runningCtx, done := context.WithCancel(context.Background())
+	runningCtx, done := context.WithCancel(context.WithoutCancel(ctx))
 
 	var plan *plans.Plan
 	var planDiags tfdiags.Diagnostics
+	panicHandler := logging.PanicHandlerWithTraceFn()
 	go func() {
-		defer logging.PanicHandler()
+		defer panicHandler()
 		defer done()
 
 		log.Printf("[DEBUG] TestFileRunner: starting plan for %s/%s", file.Name, run.Name)
-		plan, planDiags = tfCtx.Plan(config, state, planOpts)
+		plan, planDiags = tfCtx.Plan(ctx, config, state, planOpts)
 		log.Printf("[DEBUG] TestFileRunner: completed plan for %s/%s", file.Name, run.Name)
 	}()
 	waitDiags, cancelled := runner.wait(tfCtx, runningCtx, run, file, nil)
@@ -772,7 +845,7 @@ func (runner *TestFileRunner) plan(config *configs.Config, state *states.State, 
 	return tfCtx, plan, diags
 }
 
-func (runner *TestFileRunner) apply(plan *plans.Plan, state *states.State, config *configs.Config, run *moduletest.Run, file *moduletest.File) (*tofu.Context, *states.State, tfdiags.Diagnostics) {
+func (runner *TestFileRunner) apply(ctx context.Context, plan *plans.Plan, state *states.State, config *configs.Config, run *moduletest.Run, file *moduletest.File) (*tofu.Context, *states.State, tfdiags.Diagnostics) {
 	log.Printf("[TRACE] TestFileRunner: called apply for %s/%s", file.Name, run.Name)
 
 	var diags tfdiags.Diagnostics
@@ -802,16 +875,17 @@ func (runner *TestFileRunner) apply(plan *plans.Plan, state *states.State, confi
 		return nil, state, diags
 	}
 
-	runningCtx, done := context.WithCancel(context.Background())
+	runningCtx, done := context.WithCancel(context.WithoutCancel(ctx))
 
 	var updated *states.State
 	var applyDiags tfdiags.Diagnostics
 
+	panicHandler := logging.PanicHandlerWithTraceFn()
 	go func() {
-		defer logging.PanicHandler()
+		defer panicHandler()
 		defer done()
 		log.Printf("[DEBUG] TestFileRunner: starting apply for %s/%s", file.Name, run.Name)
-		updated, applyDiags = tfCtx.Apply(plan, config)
+		updated, applyDiags = tfCtx.Apply(ctx, plan, config)
 		log.Printf("[DEBUG] TestFileRunner: completed apply for %s/%s", file.Name, run.Name)
 	}()
 	waitDiags, cancelled := runner.wait(tfCtx, runningCtx, run, file, created)
@@ -894,7 +968,7 @@ func (runner *TestFileRunner) wait(ctx *tofu.Context, runningCtx context.Context
 	return diags, cancelled
 }
 
-func (runner *TestFileRunner) Cleanup(file *moduletest.File) {
+func (runner *TestFileRunner) Cleanup(ctx context.Context, file *moduletest.File) {
 	log.Printf("[TRACE] TestStateManager: cleaning up state for %s", file.Name)
 
 	if runner.Suite.Cancelled {
@@ -903,42 +977,8 @@ func (runner *TestFileRunner) Cleanup(file *moduletest.File) {
 		return
 	}
 
-	// First, we'll clean up the main state.
-	main := runner.States[MainStateIdentifier]
-
-	var diags tfdiags.Diagnostics
-	updated := main.State
-	if main.Run == nil {
-		if !main.State.Empty() {
-			log.Printf("[ERROR] TestFileRunner: found inconsistent run block and state file in %s", file.Name)
-			diags = diags.Append(tfdiags.Sourceless(tfdiags.Error, "Inconsistent state", fmt.Sprintf("Found inconsistent state while cleaning up %s. This is a bug in OpenTofu - please report it", file.Name)))
-		}
-	} else {
-		reset, configDiags := runner.Suite.Config.TransformForTest(main.Run.Config, file.Config)
-		diags = diags.Append(configDiags)
-
-		if !configDiags.HasErrors() {
-			var destroyDiags tfdiags.Diagnostics
-			updated, destroyDiags = runner.destroy(runner.Suite.Config, main.State, main.Run, file)
-			diags = diags.Append(destroyDiags)
-		}
-
-		reset()
-	}
-	runner.Suite.View.DestroySummary(diags, main.Run, file, updated)
-
-	if runner.Suite.Cancelled {
-		// In case things were cancelled during the last execution.
-		return
-	}
-
 	var states []*TestFileState
 	for key, state := range runner.States {
-		if key == MainStateIdentifier {
-			// We processed the main state above.
-			continue
-		}
-
 		if state.Run == nil {
 			if state.State.Empty() {
 				// We can see a run block being empty when the state is empty if
@@ -947,7 +987,12 @@ func (runner *TestFileRunner) Cleanup(file *moduletest.File) {
 				// skip it.
 				continue
 			}
-			log.Printf("[ERROR] TestFileRunner: found inconsistent run block and state file in %s for module %s", file.Name, key)
+
+			if key == MainStateIdentifier {
+				log.Printf("[ERROR] TestFileRunner: found inconsistent run block and state file in %s", file.Name)
+			} else {
+				log.Printf("[ERROR] TestFileRunner: found inconsistent run block and state file in %s for module %s", file.Name, key)
+			}
 
 			// Otherwise something bad has happened, and we have no way to
 			// recover from it. This shouldn't happen in reality, but we'll
@@ -962,14 +1007,13 @@ func (runner *TestFileRunner) Cleanup(file *moduletest.File) {
 		states = append(states, state)
 	}
 
-	slices.SortFunc(states, func(a, b *TestFileState) bool {
+	slices.SortFunc(states, func(a, b *TestFileState) int {
 		// We want to clean up later run blocks first. So, we'll sort this in
 		// reverse according to index. This means larger indices first.
-		return a.Run.Index > b.Run.Index
+		return b.Run.Index - a.Run.Index
 	})
 
-	// Then we'll clean up the additional states for custom modules in reverse
-	// order.
+	// Clean up all the states (for main and custom modules) in reverse order.
 	for _, state := range states {
 		log.Printf("[DEBUG] TestStateManager: cleaning up state for %s/%s", file.Name, state.Run.Name)
 
@@ -981,18 +1025,29 @@ func (runner *TestFileRunner) Cleanup(file *moduletest.File) {
 		}
 
 		var diags tfdiags.Diagnostics
+		var runConfig *configs.Config
 
-		reset, configDiags := state.Run.Config.ConfigUnderTest.TransformForTest(state.Run.Config, file.Config)
+		isMainState := state.Run.Config.Module == nil
+		if isMainState {
+			runConfig = runner.Suite.Config
+		} else {
+			runConfig = state.Run.Config.ConfigUnderTest
+		}
+
+		reset, configDiags := runConfig.TransformForTest(state.Run.Config, file.Config)
 		diags = diags.Append(configDiags)
 
 		updated := state.State
 		if !diags.HasErrors() {
 			var destroyDiags tfdiags.Diagnostics
-			updated, destroyDiags = runner.destroy(state.Run.Config.ConfigUnderTest, state.State, state.Run, file)
+			updated, destroyDiags = runner.destroy(ctx, runConfig, state.State, state.Run, file)
 			diags = diags.Append(destroyDiags)
 		}
 		runner.Suite.View.DestroySummary(diags, state.Run, file, updated)
 
+		if updated.HasManagedResourceInstanceObjects() {
+			views.SaveErroredTestStateFile(updated, state.Run, file, runner.Suite.View)
+		}
 		reset()
 	}
 }
@@ -1005,15 +1060,16 @@ func (runner *TestFileRunner) Cleanup(file *moduletest.File) {
 // Crucially, it differs from prepareInputVariablesForAssertions in that it only
 // includes variables that are reference by the config and not everything that
 // is defined within the test run block and test file.
-func buildInputVariablesForTest(run *moduletest.Run, file *moduletest.File, config *configs.Config, globals map[string]backend.UnparsedVariableValue) (tofu.InputValues, tfdiags.Diagnostics) {
+func buildInputVariablesForTest(run *moduletest.Run, file *moduletest.File, config *configs.Config, globals map[string]backend.UnparsedVariableValue, evalCtx *hcl.EvalContext) (tofu.InputValues, tfdiags.Diagnostics) {
 	variables := make(map[string]backend.UnparsedVariableValue)
 	for name := range config.Module.Variables {
 		if run != nil {
 			if expr, exists := run.Config.Variables[name]; exists {
 				// Local variables take precedence.
-				variables[name] = unparsedVariableValueExpression{
+				variables[name] = testVariableValueExpression{
 					expr:       expr,
 					sourceType: tofu.ValueFromConfig,
+					ctx:        evalCtx,
 				}
 				continue
 			}
@@ -1022,9 +1078,10 @@ func buildInputVariablesForTest(run *moduletest.Run, file *moduletest.File, conf
 		if file != nil {
 			if expr, exists := file.Config.Variables[name]; exists {
 				// If it's not set locally, it maybe set for the entire file.
-				variables[name] = unparsedVariableValueExpression{
+				variables[name] = testVariableValueExpression{
 					expr:       expr,
 					sourceType: tofu.ValueFromConfig,
+					ctx:        evalCtx,
 				}
 				continue
 			}
@@ -1045,6 +1102,105 @@ func buildInputVariablesForTest(run *moduletest.Run, file *moduletest.File, conf
 	return backend.ParseVariableValues(variables, config.Module.Variables)
 }
 
+// getEvalContextForTest constructs an hcl.EvalContext based on the provided map of
+// TestFileState instances, configuration and global variables.
+// It extracts the relevant information from the input parameters to create a
+// context suitable for HCL evaluation.
+func getEvalContextForTest(states map[string]*TestFileState, config *configs.Config, globals map[string]backend.UnparsedVariableValue) (*hcl.EvalContext, tfdiags.Diagnostics) {
+	var diags tfdiags.Diagnostics
+	runCtx := make(map[string]cty.Value)
+	for _, state := range states {
+		if state.Run == nil {
+			continue
+		}
+		outputs := make(map[string]cty.Value)
+		mod := state.State.Modules[""] // Empty string is what is used by the module in the test runner
+		for outName, out := range mod.OutputValues {
+			outputs[outName] = out.Value
+		}
+		runCtx[state.Run.Name] = cty.ObjectVal(outputs)
+	}
+
+	// If the variable is referenced in the tfvars file or TF_VAR_ environment variable, then lookup the value
+	// in global variables; otherwise, assign the default value.
+	inputValues, diags := parseAndApplyDefaultValues(globals, config.Module.Variables)
+	diags.Append(diags)
+
+	varCtx := make(map[string]cty.Value)
+	for name, val := range inputValues {
+		varCtx[name] = val.Value
+	}
+
+	ctx := &hcl.EvalContext{
+		Variables: map[string]cty.Value{
+			"run": cty.ObjectVal(runCtx),
+			"var": cty.ObjectVal(varCtx),
+		},
+	}
+	return ctx, diags
+}
+
+type testVariableValueExpression struct {
+	expr       hcl.Expression
+	sourceType tofu.ValueSourceType
+	ctx        *hcl.EvalContext
+}
+
+func (v testVariableValueExpression) ParseVariableValue(mode configs.VariableParsingMode) (*tofu.InputValue, tfdiags.Diagnostics) {
+	var diags tfdiags.Diagnostics
+	val, hclDiags := v.expr.Value(v.ctx)
+	diags = diags.Append(hclDiags)
+
+	rng := tfdiags.SourceRangeFromHCL(v.expr.Range())
+
+	return &tofu.InputValue{
+		Value:       val,
+		SourceType:  v.sourceType,
+		SourceRange: rng,
+	}, diags
+}
+
+// parseAndApplyDefaultValues parses the given unparsed variables into tofu.InputValues
+// and applies default values from the configuration variables where applicable.
+// This ensures all variables are correctly initialized and returns the resulting tofu.InputValues.
+func parseAndApplyDefaultValues(unparsedVariables map[string]backend.UnparsedVariableValue, configVariables map[string]*configs.Variable) (tofu.InputValues, tfdiags.Diagnostics) {
+	var diags tfdiags.Diagnostics
+	inputs := make(tofu.InputValues, len(unparsedVariables))
+	for name, variable := range unparsedVariables {
+		value, valueDiags := variable.ParseVariableValue(configs.VariableParseLiteral)
+		diags = diags.Append(valueDiags)
+
+		// Even so the variable is declared, some of the fields could
+		// be empty and filled in via type default values.
+		if confVariable, ok := configVariables[name]; ok && confVariable.TypeDefaults != nil {
+			value.Value = confVariable.TypeDefaults.Apply(value.Value)
+		}
+
+		inputs[name] = value
+	}
+
+	// Now, we're going to apply any default values from the configuration.
+	// We do this after the conversion into tofu.InputValues, as the
+	// defaults have already been converted into cty.Value objects.
+	for name, variable := range configVariables {
+		if _, exists := unparsedVariables[name]; exists {
+			// Then we don't want to apply the default for this variable as we
+			// already have a value.
+			continue
+		}
+
+		if variable.Default != cty.NilVal {
+			inputs[name] = &tofu.InputValue{
+				Value:       variable.Default,
+				SourceType:  tofu.ValueFromConfig,
+				SourceRange: tfdiags.SourceRangeFromHCL(variable.DeclRange),
+			}
+		}
+	}
+
+	return inputs, diags
+}
+
 // prepareInputVariablesForAssertions creates a tofu.InputValues mapping
 // that contains all the variables defined for a given run and file, alongside
 // any unset variables that have defaults within the provided config.
@@ -1054,17 +1210,26 @@ func buildInputVariablesForTest(run *moduletest.Run, file *moduletest.File, conf
 // within the config. This allows the assertions to refer to variables defined
 // solely within the test file, and not only those within the configuration.
 //
+// It also allows references to previously run test module's outputs as variable
+// expressions.  This relies upon the evaluation order and will not sort the test cases
+// to run in the dependent order.
+//
 // In addition, it modifies the provided config so that any variables that are
 // available are also defined in the config. It returns a function that resets
 // the config which must be called so the config can be reused going forward.
-func prepareInputVariablesForAssertions(config *configs.Config, run *moduletest.Run, file *moduletest.File, globals map[string]backend.UnparsedVariableValue) (tofu.InputValues, func(), tfdiags.Diagnostics) {
+func (runner *TestFileRunner) prepareInputVariablesForAssertions(config *configs.Config, run *moduletest.Run, file *moduletest.File, globals map[string]backend.UnparsedVariableValue) (tofu.InputValues, func(), tfdiags.Diagnostics) {
+	var diags tfdiags.Diagnostics
+	ctx, ctxDiags := getEvalContextForTest(runner.States, config, globals)
+	diags = diags.Append(ctxDiags)
+
 	variables := make(map[string]backend.UnparsedVariableValue)
 
 	if run != nil {
 		for name, expr := range run.Config.Variables {
-			variables[name] = unparsedVariableValueExpression{
+			variables[name] = testVariableValueExpression{
 				expr:       expr,
 				sourceType: tofu.ValueFromConfig,
+				ctx:        ctx,
 			}
 		}
 	}
@@ -1076,9 +1241,10 @@ func prepareInputVariablesForAssertions(config *configs.Config, run *moduletest.
 				// that value to take precedence.
 				continue
 			}
-			variables[name] = unparsedVariableValueExpression{
+			variables[name] = testVariableValueExpression{
 				expr:       expr,
 				sourceType: tofu.ValueFromConfig,
+				ctx:        ctx,
 			}
 		}
 	}
@@ -1094,35 +1260,10 @@ func prepareInputVariablesForAssertions(config *configs.Config, run *moduletest.
 	}
 
 	// We've gathered all the values we have, let's convert them into
-	// tofu.InputValues so they can be passed into the Terraform graph.
-
-	inputs := make(tofu.InputValues, len(variables))
-	var diags tfdiags.Diagnostics
-	for name, variable := range variables {
-		value, valueDiags := variable.ParseVariableValue(configs.VariableParseLiteral)
-		diags = diags.Append(valueDiags)
-		inputs[name] = value
-	}
-
-	// Next, we're going to apply any default values from the configuration.
-	// We do this after the conversion into tofu.InputValues, as the
-	// defaults have already been converted into cty.Value objects.
-
-	for name, variable := range config.Module.Variables {
-		if _, exists := variables[name]; exists {
-			// Then we don't want to apply the default for this variable as we
-			// already have a value.
-			continue
-		}
-
-		if variable.Default != cty.NilVal {
-			inputs[name] = &tofu.InputValue{
-				Value:       variable.Default,
-				SourceType:  tofu.ValueFromConfig,
-				SourceRange: tfdiags.SourceRangeFromHCL(variable.DeclRange),
-			}
-		}
-	}
+	// tofu.InputValues so they can be passed into the OpenTofu graph.
+	// Also, apply default values from the configuration variables where applicable.
+	inputs, valDiags := parseAndApplyDefaultValues(variables, config.Module.Variables)
+	diags.Append(valDiags)
 
 	// Finally, we're going to do a some modifications to the config.
 	// If we have got variable values from the test file we need to make sure
@@ -1158,4 +1299,48 @@ func prepareInputVariablesForAssertions(config *configs.Config, run *moduletest.
 	return inputs, func() {
 		config.Module.Variables = currentVars
 	}, diags
+}
+
+// checkProblematicPlanErrors checks for plan errors that are also "expected" by the tests. In some cases we expect an error, however,
+// what causes the error might not be what we expected. So we try to warn about that here.
+func checkProblematicPlanErrors(expectedFailures addrs.Map[addrs.Referenceable, bool], planDiags tfdiags.Diagnostics) tfdiags.Diagnostics {
+	for _, diag := range planDiags {
+		rule, ok := addrs.DiagnosticOriginatesFromCheckRule(diag)
+		if !ok {
+			continue
+		}
+		if rule.Container.CheckableKind() != addrs.CheckableInputVariable {
+			continue
+		}
+
+		addr, ok := rule.Container.(addrs.AbsInputVariableInstance)
+		if ok && expectedFailures.Has(addr.Variable) {
+			planDiags = planDiags.Append(tfdiags.Sourceless(
+				tfdiags.Warning,
+				"Invalid Variable in test file",
+				fmt.Sprintf("Variable %s, has an invalid value within the test. Although this was an expected failure, it has meant the apply stage was unable to run so the overall test will fail.", rule.Container.String())))
+		}
+	}
+	return planDiags
+}
+
+// simulateStateSerialization takes a state, serializes it, deserializes it
+// and then returns. This is useful for state writing side effects without
+// actually writing a state file.
+func simulateStateSerialization(state *states.State) (*states.State, error) {
+	buff := &bytes.Buffer{}
+
+	f := statefile.New(state, "", 0)
+
+	err := statefile.Write(f, buff, encryption.StateEncryptionDisabled())
+	if err != nil {
+		return nil, fmt.Errorf("writing state to buffer: %w", err)
+	}
+
+	f, err = statefile.Read(buff, encryption.StateEncryptionDisabled())
+	if err != nil {
+		return nil, fmt.Errorf("reading state from buffer: %w", err)
+	}
+
+	return f.State, nil
 }

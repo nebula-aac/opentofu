@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -84,6 +86,15 @@ type MockProvider struct {
 	ReadDataSourceResponse *providers.ReadDataSourceResponse
 	ReadDataSourceRequest  providers.ReadDataSourceRequest
 	ReadDataSourceFn       func(providers.ReadDataSourceRequest) providers.ReadDataSourceResponse
+
+	GetFunctionsCalled   bool
+	GetFunctionsResponse *providers.GetFunctionsResponse
+	GetFunctionsFn       func() providers.GetFunctionsResponse
+
+	CallFunctionCalled   bool
+	CallFunctionResponse *providers.CallFunctionResponse
+	CallFunctionRequest  providers.CallFunctionRequest
+	CallFunctionFn       func(providers.CallFunctionRequest) providers.CallFunctionResponse
 
 	CloseCalled bool
 	CloseError  error
@@ -395,9 +406,9 @@ func (p *MockProvider) PlanResourceChange(r providers.PlanResourceChangeRequest)
 
 func (p *MockProvider) ApplyResourceChange(r providers.ApplyResourceChangeRequest) (resp providers.ApplyResourceChangeResponse) {
 	p.Lock()
+	defer p.Unlock()
 	p.ApplyResourceChangeCalled = true
 	p.ApplyResourceChangeRequest = r
-	p.Unlock()
 
 	if !p.ConfigureProviderCalled {
 		resp.Diagnostics = resp.Diagnostics.Append(fmt.Errorf("Configure not called before ApplyResourceChange %q", r.TypeName))
@@ -464,9 +475,13 @@ func (p *MockProvider) ImportResourceState(r providers.ImportResourceStateReques
 	}
 
 	if p.ImportResourceStateResponse != nil {
-		resp = *p.ImportResourceStateResponse
+		// There's no guarantee that the imported resources slice isn't being read somewhere else
+		// As such, any changes we make on it (including through pointers) would lead to data races.
+		// To avoid that, copy and make changes on the copy
+		resp.ImportedResources = make([]providers.ImportedResource, len(p.ImportResourceStateResponse.ImportedResources))
+
 		// fixup the cty value to match the schema
-		for i, res := range resp.ImportedResources {
+		for i, res := range p.ImportResourceStateResponse.ImportedResources {
 			schema, ok := p.getProviderSchema().ResourceTypes[res.TypeName]
 			if !ok {
 				resp.Diagnostics = resp.Diagnostics.Append(fmt.Errorf("no schema found for %q", res.TypeName))
@@ -507,6 +522,39 @@ func (p *MockProvider) ReadDataSource(r providers.ReadDataSourceRequest) (resp p
 		resp = *p.ReadDataSourceResponse
 	}
 
+	return resp
+}
+
+func (p *MockProvider) GetFunctions() (resp providers.GetFunctionsResponse) {
+	p.Lock()
+	defer p.Unlock()
+
+	p.GetFunctionsCalled = true
+
+	if p.GetFunctionsFn != nil {
+		return p.GetFunctionsFn()
+	}
+
+	if p.GetFunctionsResponse != nil {
+		resp = *p.GetFunctionsResponse
+	}
+	return resp
+}
+
+func (p *MockProvider) CallFunction(r providers.CallFunctionRequest) (resp providers.CallFunctionResponse) {
+	p.Lock()
+	defer p.Unlock()
+
+	p.CallFunctionCalled = true
+	p.CallFunctionRequest = r
+
+	if p.CallFunctionFn != nil {
+		return p.CallFunctionFn(r)
+	}
+
+	if p.CallFunctionResponse != nil {
+		resp = *p.CallFunctionResponse
+	}
 	return resp
 }
 

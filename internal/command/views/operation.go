@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package views
@@ -15,6 +17,7 @@ import (
 	"github.com/opentofu/opentofu/internal/command/jsonplan"
 	"github.com/opentofu/opentofu/internal/command/jsonprovider"
 	"github.com/opentofu/opentofu/internal/command/views/json"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/plans"
 	"github.com/opentofu/opentofu/internal/states/statefile"
 	"github.com/opentofu/opentofu/internal/tfdiags"
@@ -27,7 +30,7 @@ type Operation interface {
 	Stopping()
 	Cancelled(planMode plans.Mode)
 
-	EmergencyDumpState(stateFile *statefile.File) error
+	EmergencyDumpState(stateFile *statefile.File, enc encryption.StateEncryption) error
 
 	PlannedChange(change *plans.ResourceInstanceChangeSrc)
 	Plan(plan *plans.Plan, schemas *tofu.Schemas)
@@ -52,7 +55,7 @@ type OperationHuman struct {
 	// automated system rather than directly at a command prompt.
 	//
 	// This is a hint not to produce messages that expect that a user can
-	// run a follow-up command, perhaps because Terraform is running in
+	// run a follow-up command, perhaps because OpenTofu is running in
 	// some sort of workflow automation tool that abstracts away the
 	// exact commands that are being run.
 	inAutomation bool
@@ -81,9 +84,9 @@ func (v *OperationHuman) Cancelled(planMode plans.Mode) {
 	}
 }
 
-func (v *OperationHuman) EmergencyDumpState(stateFile *statefile.File) error {
+func (v *OperationHuman) EmergencyDumpState(stateFile *statefile.File, enc encryption.StateEncryption) error {
 	stateBuf := new(bytes.Buffer)
-	jsonErr := statefile.Write(stateFile, stateBuf)
+	jsonErr := statefile.Write(stateFile, stateBuf, enc)
 	if jsonErr != nil {
 		return jsonErr
 	}
@@ -102,6 +105,7 @@ func (v *OperationHuman) Plan(plan *plans.Plan, schemas *tofu.Schemas) {
 		Colorize:            v.view.colorize,
 		Streams:             v.view.streams,
 		RunningInAutomation: v.inAutomation,
+		ShowSensitive:       v.view.showSensitive,
 	}
 
 	jplan := jsonformat.Plan{
@@ -197,9 +201,9 @@ func (v *OperationJSON) Cancelled(planMode plans.Mode) {
 	}
 }
 
-func (v *OperationJSON) EmergencyDumpState(stateFile *statefile.File) error {
+func (v *OperationJSON) EmergencyDumpState(stateFile *statefile.File, enc encryption.StateEncryption) error {
 	stateBuf := new(bytes.Buffer)
-	jsonErr := statefile.Write(stateFile, stateBuf)
+	jsonErr := statefile.Write(stateFile, stateBuf, enc)
 	if jsonErr != nil {
 		return jsonErr
 	}

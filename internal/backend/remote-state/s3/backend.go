@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package s3
@@ -7,7 +9,9 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -17,8 +21,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	awsbase "github.com/hashicorp/aws-sdk-go-base/v2"
+	baselogging "github.com/hashicorp/aws-sdk-go-base/v2/logging"
+	awsbaseValidation "github.com/hashicorp/aws-sdk-go-base/v2/validation"
 	"github.com/opentofu/opentofu/internal/backend"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/httpclient"
 	"github.com/opentofu/opentofu/internal/logging"
 	"github.com/opentofu/opentofu/internal/tfdiags"
@@ -27,14 +34,15 @@ import (
 	"github.com/zclconf/go-cty/cty/gocty"
 )
 
-func New() backend.Backend {
-	return &Backend{}
+func New(enc encryption.StateEncryption) backend.Backend {
+	return &Backend{encryption: enc}
 }
 
 type Backend struct {
-	s3Client  *s3.Client
-	dynClient *dynamodb.Client
-	awsConfig aws.Config
+	encryption encryption.StateEncryption
+	s3Client   *s3.Client
+	dynClient  *dynamodb.Client
+	awsConfig  aws.Config
 
 	bucketName            string
 	keyName               string
@@ -49,7 +57,8 @@ type Backend struct {
 
 // ConfigSchema returns a description of the expected configuration
 // structure for the receiving backend.
-func (b *Backend) ConfigSchema(context.Context) *configschema.Block {
+// This structure is mirrored by the encryption aws_kms key provider and should be kept in sync.
+func (b *Backend) ConfigSchema() *configschema.Block {
 	return &configschema.Block{
 		Attributes: map[string]*configschema.Attribute{
 			"bucket": {
@@ -68,6 +77,7 @@ func (b *Backend) ConfigSchema(context.Context) *configschema.Block {
 				Description: "AWS region of the S3 Bucket and DynamoDB Table (if used).",
 			},
 			"endpoints": {
+				Optional: true,
 				NestedType: &configschema.Object{
 					Nesting: configschema.NestingSingle,
 					Attributes: map[string]*configschema.Attribute{
@@ -278,11 +288,6 @@ func (b *Backend) ConfigSchema(context.Context) *configschema.Block {
 				Optional:    true,
 				Description: "The maximum number of times an AWS API request is retried on retryable failure.",
 			},
-			"use_legacy_workflow": {
-				Type:        cty.Bool,
-				Optional:    true,
-				Description: "Use the legacy authentication workflow, preferring environment variables over backend configuration.",
-			},
 			"custom_ca_bundle": {
 				Type:        cty.String,
 				Optional:    true,
@@ -299,6 +304,7 @@ func (b *Backend) ConfigSchema(context.Context) *configschema.Block {
 				Description: "The endpoint mode of IMDS. Valid values: IPv4, IPv6.",
 			},
 			"assume_role": {
+				Optional: true,
 				NestedType: &configschema.Object{
 					Nesting: configschema.NestingSingle,
 					Attributes: map[string]*configschema.Attribute{
@@ -358,6 +364,7 @@ func (b *Backend) ConfigSchema(context.Context) *configschema.Block {
 				},
 			},
 			"assume_role_with_web_identity": {
+				Optional: true,
 				NestedType: &configschema.Object{
 					Nesting: configschema.NestingSingle,
 					Attributes: map[string]*configschema.Attribute{
@@ -415,6 +422,17 @@ func (b *Backend) ConfigSchema(context.Context) *configschema.Block {
 				Optional:    true,
 				Description: "The address of an HTTP proxy to use when accessing the AWS API.",
 			},
+			"https_proxy": {
+				Type:        cty.String,
+				Optional:    true,
+				Description: "The address of an HTTPS proxy to use when accessing the AWS API.",
+			},
+			"no_proxy": {
+				Type:     cty.String,
+				Optional: true,
+				Description: `Comma-separated values which specify hosts that should be excluded from proxying.
+See details: https://cs.opensource.google/go/x/net/+/refs/tags/v0.17.0:http/httpproxy/proxy.go;l=38-50.`,
+			},
 			"insecure": {
 				Type:        cty.Bool,
 				Optional:    true,
@@ -443,7 +461,7 @@ func (b *Backend) ConfigSchema(context.Context) *configschema.Block {
 // configuration, and inserts any missing defaults, assuming that its
 // structure has already been validated per the schema returned by
 // ConfigSchema.
-func (b *Backend) PrepareConfig(ctx context.Context, obj cty.Value) (cty.Value, tfdiags.Diagnostics) {
+func (b *Backend) PrepareConfig(obj cty.Value) (cty.Value, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 	if obj.IsNull() {
 		return obj, diags
@@ -623,7 +641,7 @@ func (b *Backend) PrepareConfig(ctx context.Context, obj cty.Value) (cty.Value, 
 // The given configuration is assumed to have already been validated
 // against the schema returned by ConfigSchema and passed validation
 // via PrepareConfig.
-func (b *Backend) Configure(ctx context.Context, obj cty.Value) tfdiags.Diagnostics {
+func (b *Backend) Configure(obj cty.Value) tfdiags.Diagnostics {
 	var diags tfdiags.Diagnostics
 	if obj.IsNull() {
 		return diags
@@ -635,7 +653,7 @@ func (b *Backend) Configure(ctx context.Context, obj cty.Value) tfdiags.Diagnost
 	}
 
 	if region != "" && !boolAttr(obj, "skip_region_validation") {
-		if err := awsbase.ValidateRegion(region); err != nil {
+		if err := awsbaseValidation.SupportedRegion(region); err != nil {
 			diags = diags.Append(tfdiags.AttributeValue(
 				tfdiags.Error,
 				"Invalid region value",
@@ -693,11 +711,13 @@ func (b *Backend) Configure(ctx context.Context, obj cty.Value) tfdiags.Diagnost
 		}
 	}
 
+	ctx := context.TODO()
+	ctx, baselog := attachLoggerToContext(ctx)
+
 	cfg := &awsbase.Config{
 		AccessKey:               stringAttr(obj, "access_key"),
 		CallerDocumentationURL:  "https://opentofu.org/docs/language/settings/backends/s3",
 		CallerName:              "S3 Backend",
-		SuppressDebugLog:        logging.IsDebugOrHigher(),
 		IamEndpoint:             customEndpoints["iam"].String(obj),
 		MaxRetries:              intAttrDefault(obj, "max_retries", 5),
 		Profile:                 stringAttr(obj, "profile"),
@@ -708,10 +728,17 @@ func (b *Backend) Configure(ctx context.Context, obj cty.Value) tfdiags.Diagnost
 		StsEndpoint:             customEndpoints["sts"].String(obj),
 		StsRegion:               stringAttr(obj, "sts_region"),
 		Token:                   stringAttr(obj, "token"),
-		HTTPProxy:               stringAttrDefaultEnvVar(obj, "http_proxy", "HTTP_PROXY", "HTTPS_PROXY"),
-		Insecure:                boolAttr(obj, "insecure"),
-		UseDualStackEndpoint:    boolAttr(obj, "use_dualstack_endpoint"),
-		UseFIPSEndpoint:         boolAttr(obj, "use_fips_endpoint"),
+
+		// Note: we don't need to read env variables explicitly because they are read implicitly by aws-sdk-base-go:
+		// see: https://github.com/hashicorp/aws-sdk-go-base/blob/v2.0.0-beta.41/internal/config/config.go#L133
+		// which relies on: https://cs.opensource.google/go/x/net/+/refs/tags/v0.18.0:http/httpproxy/proxy.go;l=89-96
+		//
+		// Note: we are switching to "separate" mode here since the legacy mode is deprecated and should no longer be
+		// used.
+		HTTPProxyMode:        awsbase.HTTPProxyModeSeparate,
+		Insecure:             boolAttr(obj, "insecure"),
+		UseDualStackEndpoint: boolAttr(obj, "use_dualstack_endpoint"),
+		UseFIPSEndpoint:      boolAttr(obj, "use_fips_endpoint"),
 		UserAgent: awsbase.UserAgentProducts{
 			{Name: "APN", Version: "1.0"},
 			{Name: httpclient.DefaultApplicationName, Version: version.String()},
@@ -719,12 +746,17 @@ func (b *Backend) Configure(ctx context.Context, obj cty.Value) tfdiags.Diagnost
 		CustomCABundle:                 stringAttrDefaultEnvVar(obj, "custom_ca_bundle", "AWS_CA_BUNDLE"),
 		EC2MetadataServiceEndpoint:     stringAttrDefaultEnvVar(obj, "ec2_metadata_service_endpoint", "AWS_EC2_METADATA_SERVICE_ENDPOINT"),
 		EC2MetadataServiceEndpointMode: stringAttrDefaultEnvVar(obj, "ec2_metadata_service_endpoint_mode", "AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE"),
+		Logger:                         baselog,
 	}
 
-	if val, ok := boolAttrOk(obj, "use_legacy_workflow"); ok {
-		cfg.UseLegacyWorkflow = val
-	} else {
-		cfg.UseLegacyWorkflow = true
+	if val, ok := stringAttrOk(obj, "http_proxy"); ok {
+		cfg.HTTPProxy = &val
+	}
+	if val, ok := stringAttrOk(obj, "https_proxy"); ok {
+		cfg.HTTPSProxy = &val
+	}
+	if val, ok := stringAttrOk(obj, "no_proxy"); ok {
+		cfg.NoProxy = val
 	}
 
 	if val, ok := boolAttrOk(obj, "skip_metadata_api_check"); ok {
@@ -797,6 +829,12 @@ func (b *Backend) Configure(ctx context.Context, obj cty.Value) tfdiags.Diagnost
 	b.s3Client = s3.NewFromConfig(awsConfig, getS3Config(obj))
 
 	return diags
+}
+
+func attachLoggerToContext(ctx context.Context) (context.Context, baselogging.HcLogger) {
+	ctx, baselog := baselogging.NewHcLogger(ctx, logging.HCLogger().Named("backend-s3"))
+	ctx = baselogging.RegisterLogger(ctx, baselog)
+	return ctx, baselog
 }
 
 func verifyAllowedAccountID(ctx context.Context, awsConfig aws.Config, cfg *awsbase.Config) tfdiags.Diagnostics {
@@ -891,7 +929,7 @@ func configureAssumeRole(obj cty.Value) *awsbase.AssumeRole {
 	assumeRole := awsbase.AssumeRole{}
 
 	assumeRole.RoleARN = stringAttr(obj, "role_arn")
-	assumeRole.Duration = time.Duration(intAttr(obj, "assume_role_duration_seconds") * int(time.Second))
+	assumeRole.Duration = time.Duration(int64(intAttr(obj, "assume_role_duration_seconds")) * int64(time.Second))
 	assumeRole.ExternalID = stringAttr(obj, "external_id")
 	assumeRole.Policy = stringAttr(obj, "assume_role_policy")
 	assumeRole.SessionName = stringAttr(obj, "session_name")
@@ -1170,6 +1208,14 @@ func (e customEndpoint) String(obj cty.Value) string {
 	return v
 }
 
+func includeProtoIfNecessary(endpoint string) string {
+	if matched, _ := regexp.MatchString("[a-z]*://.*", endpoint); !matched {
+		log.Printf("[DEBUG] Adding https:// prefix to endpoint '%s'", endpoint)
+		endpoint = fmt.Sprintf("https://%s", endpoint)
+	}
+	return endpoint
+}
+
 func (e customEndpoint) StringOk(obj cty.Value) (string, bool) {
 	for _, path := range e.Paths {
 		val, err := path.Apply(obj)
@@ -1177,12 +1223,12 @@ func (e customEndpoint) StringOk(obj cty.Value) (string, bool) {
 			continue
 		}
 		if s, ok := stringValueOk(val); ok {
-			return s, true
+			return includeProtoIfNecessary(s), true
 		}
 	}
 	for _, envVar := range e.EnvVars {
 		if v := os.Getenv(envVar); v != "" {
-			return v, true
+			return includeProtoIfNecessary(v), true
 		}
 	}
 	return "", false

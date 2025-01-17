@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package http
@@ -12,18 +14,21 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/go-retryablehttp"
 
 	"github.com/opentofu/opentofu/internal/backend"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/legacy/helper/schema"
 	"github.com/opentofu/opentofu/internal/logging"
 	"github.com/opentofu/opentofu/internal/states/remote"
 	"github.com/opentofu/opentofu/internal/states/statemgr"
 )
 
-func New() backend.Backend {
+func New(enc encryption.StateEncryption) backend.Backend {
 	s := &schema.Backend{
 		Schema: map[string]*schema.Schema{
 			"address": &schema.Schema{
@@ -116,16 +121,43 @@ func New() backend.Backend {
 				DefaultFunc: schema.EnvDefaultFunc("TF_HTTP_CLIENT_PRIVATE_KEY_PEM", ""),
 				Description: "A PEM-encoded private key, required if client_certificate_pem is specified.",
 			},
+			"headers": &schema.Schema{
+				Type:     schema.TypeMap,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+				Optional: true,
+				ValidateFunc: func(cv interface{}, ck string) ([]string, []error) {
+					nameRegex := regexp.MustCompile("[^a-zA-Z0-9-_]")
+					valueRegex := regexp.MustCompile("[^[:ascii:]]")
+
+					headers := cv.(map[string]interface{})
+					err := make([]error, 0, len(headers))
+					for name, value := range headers {
+						if len(name) == 0 || nameRegex.MatchString(name) {
+							err = append(err, fmt.Errorf(
+								"%s \"%s\" name must not be empty and only contain A-Za-z0-9-_ characters", ck, name))
+						}
+
+						v := value.(string)
+						if len(strings.TrimSpace(v)) == 0 || valueRegex.MatchString(v) {
+							err = append(err, fmt.Errorf(
+								"%s \"%s\" value must not be empty and only contain ascii characters", ck, name))
+						}
+					}
+					return nil, err
+				},
+				Description: "A map of headers, when set will be included with HTTP requests sent to the HTTP backend",
+			},
 		},
 	}
 
-	b := &Backend{Backend: s}
+	b := &Backend{Backend: s, encryption: enc}
 	b.Backend.ConfigureFunc = b.configure
 	return b
 }
 
 type Backend struct {
 	*schema.Backend
+	encryption encryption.StateEncryption
 
 	client *httpClient
 }
@@ -216,6 +248,33 @@ func (b *Backend) configure(ctx context.Context) error {
 
 	unlockMethod := data.Get("unlock_method").(string)
 
+	username := data.Get("username").(string)
+	password := data.Get("password").(string)
+
+	var headers map[string]string
+	if dv, ok := data.GetOk("headers"); ok {
+		dh := dv.(map[string]interface{})
+		headers = make(map[string]string, len(dh))
+
+		for k, v := range dh {
+			value, ok := v.(string)
+			if !ok {
+				return fmt.Errorf("header value for %s must be a string", k)
+			}
+			switch strings.ToLower(k) {
+			case "authorization":
+				if username != "" {
+					return fmt.Errorf("headers \"%s\" cannot be set when providing username", k)
+				}
+				headers[k] = value
+			case "content-type", "content-md5":
+				return fmt.Errorf("headers \"%s\" is reserved", k)
+			default:
+				headers[k] = value
+			}
+		}
+	}
+
 	rClient := retryablehttp.NewClient()
 	rClient.RetryMax = data.Get("retry_max").(int)
 	rClient.RetryWaitMin = time.Duration(data.Get("retry_wait_min").(int)) * time.Second
@@ -234,8 +293,9 @@ func (b *Backend) configure(ctx context.Context) error {
 		UnlockURL:    unlockURL,
 		UnlockMethod: unlockMethod,
 
-		Username: data.Get("username").(string),
-		Password: data.Get("password").(string),
+		Headers:  headers,
+		Username: username,
+		Password: password,
 
 		// accessible only for testing use
 		Client: rClient,
@@ -243,18 +303,18 @@ func (b *Backend) configure(ctx context.Context) error {
 	return nil
 }
 
-func (b *Backend) StateMgr(ctx context.Context, name string) (statemgr.Full, error) {
+func (b *Backend) StateMgr(name string) (statemgr.Full, error) {
 	if name != backend.DefaultStateName {
 		return nil, backend.ErrWorkspacesNotSupported
 	}
 
-	return &remote.State{Client: b.client}, nil
+	return remote.NewState(b.client, b.encryption), nil
 }
 
-func (b *Backend) Workspaces(context.Context) ([]string, error) {
+func (b *Backend) Workspaces() ([]string, error) {
 	return nil, backend.ErrWorkspacesNotSupported
 }
 
-func (b *Backend) DeleteWorkspace(context.Context, string, bool) error {
+func (b *Backend) DeleteWorkspace(string, bool) error {
 	return backend.ErrWorkspacesNotSupported
 }
