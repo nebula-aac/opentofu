@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package checks
@@ -24,18 +26,18 @@ const (
 	// NOTE: Our implementation relies on StatusUnknown being the zero value
 	// of Status.
 
-	// StatusPass represents that Terraform Core has evaluated the check's
+	// StatusPass represents that OpenTofu Core has evaluated the check's
 	// condition and it returned true, indicating success.
 	StatusPass Status = 'P'
 
-	// StatusFail represents that Terraform Core has evaluated the check's
+	// StatusFail represents that OpenTofu Core has evaluated the check's
 	// condition and it returned false, indicating failure.
 	StatusFail Status = 'F'
 
-	// StatusError represents that Terraform Core tried to evaluate the check's
+	// StatusError represents that OpenTofu Core tried to evaluate the check's
 	// condition but encountered an error while evaluating the check expression.
 	//
-	// This is different than StatusFail because StatusFail indiciates that
+	// This is different than StatusFail because StatusFail indicates that
 	// the condition was valid and returned false, whereas StatusError
 	// indicates that the condition was not valid at all.
 	StatusError Status = 'E'

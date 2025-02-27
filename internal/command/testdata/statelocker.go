@@ -1,10 +1,9 @@
 // statelocker use used for testing command with a locked state.
-// This will lock the state file at a given path, then wait for a sigal. On
+// This will lock the state file at a given path, then wait for a signal. On
 // SIGINT and SIGTERM the state will be Unlocked before exit.
 package main
 
 import (
-	"context"
 	"io"
 	"log"
 	"os"
@@ -29,9 +28,7 @@ func main() {
 	info.Operation = "test"
 	info.Info = "state locker"
 
-	ctx := context.Background()
-
-	lockID, err := s.Lock(ctx, info)
+	lockID, err := s.Lock(info)
 	if err != nil {
 		io.WriteString(os.Stderr, err.Error())
 		return
@@ -41,7 +38,7 @@ func main() {
 	io.WriteString(os.Stdout, "LOCKID "+lockID)
 
 	defer func() {
-		if err := s.Unlock(ctx, lockID); err != nil {
+		if err := s.Unlock(lockID); err != nil {
 			io.WriteString(os.Stderr, err.Error())
 		}
 	}()

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package views
@@ -42,20 +44,44 @@ func TestNewJSONView(t *testing.T) {
 }
 
 func TestJSONView_Log(t *testing.T) {
-	streams, done := terminal.StreamsForTesting(t)
-	jv := NewJSONView(NewView(streams))
-
-	jv.Log("hello, world")
-
-	want := []map[string]interface{}{
+	testCases := []struct {
+		caseName string
+		input    string
+		want     []map[string]interface{}
+	}{
 		{
-			"@level":   "info",
-			"@message": "hello, world",
-			"@module":  "tofu.ui",
-			"type":     "log",
+			"log with regular character",
+			"hello, world",
+			[]map[string]interface{}{
+				{
+					"@level":   "info",
+					"@message": "hello, world",
+					"@module":  "tofu.ui",
+					"type":     "log",
+				},
+			},
+		},
+		{
+			"log with special character",
+			"hello, special char, <>&",
+			[]map[string]interface{}{
+				{
+					"@level":   "info",
+					"@message": "hello, special char, <>&",
+					"@module":  "tofu.ui",
+					"type":     "log",
+				},
+			},
 		},
 	}
-	testJSONViewOutputEquals(t, done(t).Stdout(), want)
+	for _, tc := range testCases {
+		t.Run(tc.caseName, func(t *testing.T) {
+			streams, done := terminal.StreamsForTesting(t)
+			jv := NewJSONView(NewView(streams))
+			jv.Log(tc.input)
+			testJSONViewOutputEquals(t, done(t).Stdout(), tc.want)
+		})
+	}
 }
 
 // This test covers only the basics of JSON diagnostic rendering, as more
@@ -256,6 +282,7 @@ func TestJSONView_ChangeSummary(t *testing.T) {
 				"import":    float64(0),
 				"change":    float64(2),
 				"remove":    float64(3),
+				"forget":    float64(0),
 				"operation": "apply",
 			},
 		},
@@ -286,6 +313,38 @@ func TestJSONView_ChangeSummaryWithImport(t *testing.T) {
 				"change":    float64(2),
 				"remove":    float64(3),
 				"import":    float64(1),
+				"forget":    float64(0),
+				"operation": "apply",
+			},
+		},
+	}
+	testJSONViewOutputEquals(t, done(t).Stdout(), want)
+}
+
+func TestJSONView_ChangeSummaryWithForget(t *testing.T) {
+	streams, done := terminal.StreamsForTesting(t)
+	jv := NewJSONView(NewView(streams))
+
+	jv.ChangeSummary(&viewsjson.ChangeSummary{
+		Add:       1,
+		Change:    2,
+		Remove:    3,
+		Forget:    1,
+		Operation: viewsjson.OperationApplied,
+	})
+
+	want := []map[string]interface{}{
+		{
+			"@level":   "info",
+			"@message": "Apply complete! Resources: 1 added, 2 changed, 3 destroyed, 1 forgotten.",
+			"@module":  "tofu.ui",
+			"type":     "change_summary",
+			"changes": map[string]interface{}{
+				"add":       float64(1),
+				"change":    float64(2),
+				"remove":    float64(3),
+				"import":    float64(0),
+				"forget":    float64(1),
 				"operation": "apply",
 			},
 		},

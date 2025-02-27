@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package cloud
@@ -60,4 +62,13 @@ func incompatibleWorkspaceTerraformVersion(message string, ignoreVersionConflict
 	}
 	description := strings.TrimSpace(fmt.Sprintf("%s\n\n%s", message, suggestion))
 	return tfdiags.Sourceless(severity, "Incompatible TF version", description)
+}
+
+func invalidWorkspaceConfigInconsistentNameAndEnvVar() tfdiags.Diagnostic {
+	return tfdiags.AttributeValue(
+		tfdiags.Error,
+		"Invalid workspaces configuration",
+		fmt.Sprintf("The workspace defined using the environment variable \"TF_WORKSPACE\" is not consistent with the workspace \"name\" in the configuration.\n\n%s", workspaceConfigurationHelp),
+		cty.Path{cty.GetAttrStep{Name: "workspaces"}},
+	)
 }

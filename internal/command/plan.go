@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -10,16 +12,19 @@ import (
 	"github.com/opentofu/opentofu/internal/backend"
 	"github.com/opentofu/opentofu/internal/command/arguments"
 	"github.com/opentofu/opentofu/internal/command/views"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/tfdiags"
 )
 
-// PlanCommand is a Command implementation that compares a Terraform
+// PlanCommand is a Command implementation that compares a OpenTofu
 // configuration to an actual infrastructure and shows the differences.
 type PlanCommand struct {
 	Meta
 }
 
 func (c *PlanCommand) Run(rawArgs []string) int {
+	ctx := c.CommandContext()
+
 	// Parse and apply global view arguments
 	common, rawArgs := arguments.ParseView(rawArgs)
 	c.View.Configure(common)
@@ -32,6 +37,8 @@ func (c *PlanCommand) Run(rawArgs []string) int {
 
 	// Parse and validate flags
 	args, diags := arguments.ParsePlan(rawArgs)
+
+	c.View.SetShowSensitive(args.ShowSensitive)
 
 	// Instantiate the view, even if there are flag errors, so that we render
 	// diagnostics according to the desired view
@@ -57,7 +64,7 @@ func (c *PlanCommand) Run(rawArgs []string) int {
 	c.Meta.input = args.InputEnabled
 
 	// FIXME: the -parallelism flag is used to control the concurrency of
-	// Terraform operations. At the moment, this value is used both to
+	// OpenTofu operations. At the moment, this value is used both to
 	// initialize the backend via the ContextOpts field inside CLIOpts, and to
 	// set a largely unused field on the Operation request. Again, there is no
 	// clear path to pass this value down, so we continue to mutate the Meta
@@ -66,8 +73,19 @@ func (c *PlanCommand) Run(rawArgs []string) int {
 
 	diags = diags.Append(c.providerDevOverrideRuntimeWarnings())
 
+	// Inject variables from args into meta for static evaluation
+	c.GatherVariables(args.Vars)
+
+	// Load the encryption configuration
+	enc, encDiags := c.Encryption()
+	diags = diags.Append(encDiags)
+	if encDiags.HasErrors() {
+		view.Diagnostics(diags)
+		return 1
+	}
+
 	// Prepare the backend with the backend-specific arguments
-	be, beDiags := c.PrepareBackend(args.State, args.ViewType)
+	be, beDiags := c.PrepareBackend(args.State, args.ViewType, enc)
 	diags = diags.Append(beDiags)
 	if diags.HasErrors() {
 		view.Diagnostics(diags)
@@ -75,15 +93,8 @@ func (c *PlanCommand) Run(rawArgs []string) int {
 	}
 
 	// Build the operation request
-	opReq, opDiags := c.OperationRequest(be, view, args.ViewType, args.Operation, args.OutPath, args.GenerateConfigPath)
+	opReq, opDiags := c.OperationRequest(be, view, args.ViewType, args.Operation, args.OutPath, args.GenerateConfigPath, enc)
 	diags = diags.Append(opDiags)
-	if diags.HasErrors() {
-		view.Diagnostics(diags)
-		return 1
-	}
-
-	// Collect variable value and add them to the operation request
-	diags = diags.Append(c.GatherVariables(opReq, args.Vars))
 	if diags.HasErrors() {
 		view.Diagnostics(diags)
 		return 1
@@ -96,10 +107,9 @@ func (c *PlanCommand) Run(rawArgs []string) int {
 	diags = nil
 
 	// Perform the operation
-	op, err := c.RunOperation(be, opReq)
-	if err != nil {
-		diags = diags.Append(err)
-		view.Diagnostics(diags)
+	op, diags := c.RunOperation(ctx, be, opReq)
+	view.Diagnostics(diags)
+	if diags.HasErrors() {
 		return 1
 	}
 
@@ -113,7 +123,7 @@ func (c *PlanCommand) Run(rawArgs []string) int {
 	return op.Result.ExitStatus()
 }
 
-func (c *PlanCommand) PrepareBackend(args *arguments.State, viewType arguments.ViewType) (backend.Enhanced, tfdiags.Diagnostics) {
+func (c *PlanCommand) PrepareBackend(args *arguments.State, viewType arguments.ViewType, enc encryption.Encryption) (backend.Enhanced, tfdiags.Diagnostics) {
 	// FIXME: we need to apply the state arguments to the meta object here
 	// because they are later used when initializing the backend. Carving a
 	// path to pass these arguments to the functions that need them is
@@ -129,7 +139,7 @@ func (c *PlanCommand) PrepareBackend(args *arguments.State, viewType arguments.V
 	be, beDiags := c.Backend(&BackendOpts{
 		Config:   backendConfig,
 		ViewType: viewType,
-	})
+	}, enc.State())
 	diags = diags.Append(beDiags)
 	if beDiags.HasErrors() {
 		return nil, diags
@@ -145,11 +155,12 @@ func (c *PlanCommand) OperationRequest(
 	args *arguments.Operation,
 	planOutPath string,
 	generateConfigOut string,
+	enc encryption.Encryption,
 ) (*backend.Operation, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 
 	// Build the operation
-	opReq := c.Operation(be, viewType)
+	opReq := c.Operation(be, viewType, enc)
 	opReq.ConfigDir = "."
 	opReq.PlanMode = args.PlanMode
 	opReq.Hooks = view.Hooks()
@@ -157,6 +168,7 @@ func (c *PlanCommand) OperationRequest(
 	opReq.PlanOutPath = planOutPath
 	opReq.GenerateConfigOut = generateConfigOut
 	opReq.Targets = args.Targets
+	opReq.Excludes = args.Excludes
 	opReq.ForceReplace = args.ForceReplace
 	opReq.Type = backend.OperationTypePlan
 	opReq.View = view.Operation()
@@ -171,11 +183,9 @@ func (c *PlanCommand) OperationRequest(
 	return opReq, diags
 }
 
-func (c *PlanCommand) GatherVariables(opReq *backend.Operation, args *arguments.Vars) tfdiags.Diagnostics {
-	var diags tfdiags.Diagnostics
-
+func (c *PlanCommand) GatherVariables(args *arguments.Vars) {
 	// FIXME the arguments package currently trivially gathers variable related
-	// arguments in a heterogenous slice, in order to minimize the number of
+	// arguments in a heterogeneous slice, in order to minimize the number of
 	// code paths gathering variables during the transition to this structure.
 	// Once all commands that gather variables have been converted to this
 	// structure, we could move the variable gathering code to the arguments
@@ -188,9 +198,6 @@ func (c *PlanCommand) GatherVariables(opReq *backend.Operation, args *arguments.
 		items[i].Value = varArgs[i].Value
 	}
 	c.Meta.variableArgs = rawFlags{items: &items}
-	opReq.Variables, diags = c.collectVariableValues()
-
-	return diags
 }
 
 func (c *PlanCommand) Help() string {
@@ -234,7 +241,14 @@ Plan Customization Options:
                       resource, or resource instance and all of its
                       dependencies. You can use this option multiple times to
                       include more than one object. This is for exceptional
-                      use only.
+                      use only. Cannot be used alongside the -exclude flag
+
+  -exclude=resource   Limit the planning operation to not operate on the given
+                      module, resource, or resource instance and all of the
+                      resources and modules that depend on it. You can use this
+                      option multiple times to exclude more than one object.
+                      This is for exceptional use only. Cannot be used alongside
+                      the -target flag
 
   -var 'foo=bar'      Set a value for one of the input variables in the root
                       module of the configuration. Use this option more than
@@ -250,6 +264,14 @@ Other Options:
   -compact-warnings          If OpenTofu produces any warnings that are not
                              accompanied by errors, shows them in a more compact
                              form that includes only the summary messages.
+
+  -consolidate-warnings      If OpenTofu produces any warnings, no consolodation
+                             will be performed. All locations, for all warnings
+                             will be listed. Enabled by default.
+
+  -consolidate-errors        If OpenTofu produces any errors, no consolodation
+                             will be performed. All locations, for all errors
+                             will be listed. Disabled by default
 
   -detailed-exitcode         Return detailed exit codes when the command exits.
                              This will change the meaning of exit codes to:
@@ -274,6 +296,9 @@ Other Options:
 
   -no-color                  If specified, output won't contain any color.
 
+  -concise                   Displays plan output in a concise way, skipping the
+							 refreshing log lines.
+
   -out=path                  Write a plan file to the given path. This can be
                              used as input to the "apply" command.
 
@@ -283,6 +308,12 @@ Other Options:
   -state=statefile           A legacy option used for the local backend only.
                              See the local backend's documentation for more
                              information.
+
+  -show-sensitive            If specified, sensitive values will be displayed.
+
+  -json                      Produce output in a machine-readable JSON format, 
+                             suitable for use in text editor integrations and 
+                             other automated systems. Always disables color.
 `
 	return strings.TrimSpace(helpText)
 }

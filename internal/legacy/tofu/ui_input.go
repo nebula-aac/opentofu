@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -30,6 +32,6 @@ type InputOpts struct {
 	Default string
 
 	// Secret should be true if we are asking for sensitive input.
-	// If attached to a TTY, Terraform will disable echo.
+	// If attached to a TTY, OpenTofu will disable echo.
 	Secret bool
 }

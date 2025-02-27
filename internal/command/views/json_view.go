@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package views
@@ -21,9 +23,10 @@ const JSON_UI_VERSION = "1.2"
 
 func NewJSONView(view *View) *JSONView {
 	log := hclog.New(&hclog.LoggerOptions{
-		Name:       "tofu.ui",
-		Output:     view.streams.Stdout.File,
-		JSONFormat: true,
+		Name:               "tofu.ui",
+		Output:             view.streams.Stdout.File,
+		JSONFormat:         true,
+		JSONEscapeDisabled: true,
 	})
 	jv := &JSONView{
 		log:  log,
@@ -125,4 +128,24 @@ func (v *JSONView) Outputs(outputs json.Outputs) {
 		"type", json.MessageOutputs,
 		"outputs", outputs,
 	)
+}
+
+// Output is designed for supporting command.WrappedUi
+func (v *JSONView) Output(message string) {
+	v.log.Info(message, "type", "output")
+}
+
+// Info is designed for supporting command.WrappedUi
+func (v *JSONView) Info(message string) {
+	v.log.Info(message)
+}
+
+// Warn is designed for supporting command.WrappedUi
+func (v *JSONView) Warn(message string) {
+	v.log.Warn(message)
+}
+
+// Error is designed for supporting command.WrappedUi
+func (v *JSONView) Error(message string) {
+	v.log.Error(message)
 }

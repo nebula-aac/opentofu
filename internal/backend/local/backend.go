@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package local
@@ -16,6 +18,7 @@ import (
 	"github.com/opentofu/opentofu/internal/backend"
 	"github.com/opentofu/opentofu/internal/command/views"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/logging"
 	"github.com/opentofu/opentofu/internal/states/statemgr"
 	"github.com/opentofu/opentofu/internal/tfdiags"
@@ -87,26 +90,31 @@ type Local struct {
 
 	// opLock locks operations
 	opLock sync.Mutex
+
+	encryption encryption.StateEncryption
 }
 
 var _ backend.Backend = (*Local)(nil)
 
 // New returns a new initialized local backend.
-func New() *Local {
-	return NewWithBackend(nil)
+func New(enc encryption.StateEncryption) *Local {
+	return &Local{
+		encryption: enc,
+	}
 }
 
 // NewWithBackend returns a new local backend initialized with a
 // dedicated backend for non-enhanced behavior.
-func NewWithBackend(backend backend.Backend) *Local {
+func NewWithBackend(backend backend.Backend, enc encryption.StateEncryption) *Local {
 	return &Local{
-		Backend: backend,
+		Backend:    backend,
+		encryption: enc,
 	}
 }
 
-func (b *Local) ConfigSchema(ctx context.Context) *configschema.Block {
+func (b *Local) ConfigSchema() *configschema.Block {
 	if b.Backend != nil {
-		return b.Backend.ConfigSchema(ctx)
+		return b.Backend.ConfigSchema()
 	}
 	return &configschema.Block{
 		Attributes: map[string]*configschema.Attribute{
@@ -122,9 +130,9 @@ func (b *Local) ConfigSchema(ctx context.Context) *configschema.Block {
 	}
 }
 
-func (b *Local) PrepareConfig(ctx context.Context, obj cty.Value) (cty.Value, tfdiags.Diagnostics) {
+func (b *Local) PrepareConfig(obj cty.Value) (cty.Value, tfdiags.Diagnostics) {
 	if b.Backend != nil {
-		return b.Backend.PrepareConfig(ctx, obj)
+		return b.Backend.PrepareConfig(obj)
 	}
 
 	var diags tfdiags.Diagnostics
@@ -156,9 +164,9 @@ func (b *Local) PrepareConfig(ctx context.Context, obj cty.Value) (cty.Value, tf
 	return obj, diags
 }
 
-func (b *Local) Configure(ctx context.Context, obj cty.Value) tfdiags.Diagnostics {
+func (b *Local) Configure(obj cty.Value) tfdiags.Diagnostics {
 	if b.Backend != nil {
-		return b.Backend.Configure(ctx, obj)
+		return b.Backend.Configure(obj)
 	}
 
 	var diags tfdiags.Diagnostics
@@ -186,10 +194,10 @@ func (b *Local) ServiceDiscoveryAliases() ([]backend.HostAlias, error) {
 	return []backend.HostAlias{}, nil
 }
 
-func (b *Local) Workspaces(ctx context.Context) ([]string, error) {
+func (b *Local) Workspaces() ([]string, error) {
 	// If we have a backend handling state, defer to that.
 	if b.Backend != nil {
-		return b.Backend.Workspaces(ctx)
+		return b.Backend.Workspaces()
 	}
 
 	// the listing always start with "default"
@@ -220,10 +228,10 @@ func (b *Local) Workspaces(ctx context.Context) ([]string, error) {
 // DeleteWorkspace removes a workspace.
 //
 // The "default" workspace cannot be removed.
-func (b *Local) DeleteWorkspace(ctx context.Context, name string, force bool) error {
+func (b *Local) DeleteWorkspace(name string, force bool) error {
 	// If we have a backend handling state, defer to that.
 	if b.Backend != nil {
-		return b.Backend.DeleteWorkspace(ctx, name, force)
+		return b.Backend.DeleteWorkspace(name, force)
 	}
 
 	if name == "" {
@@ -238,10 +246,10 @@ func (b *Local) DeleteWorkspace(ctx context.Context, name string, force bool) er
 	return os.RemoveAll(filepath.Join(b.stateWorkspaceDir(), name))
 }
 
-func (b *Local) StateMgr(ctx context.Context, name string) (statemgr.Full, error) {
+func (b *Local) StateMgr(name string) (statemgr.Full, error) {
 	// If we have a backend handling state, delegate to that.
 	if b.Backend != nil {
-		return b.Backend.StateMgr(ctx, name)
+		return b.Backend.StateMgr(name)
 	}
 
 	if s, ok := b.states[name]; ok {
@@ -255,7 +263,7 @@ func (b *Local) StateMgr(ctx context.Context, name string) (statemgr.Full, error
 	statePath, stateOutPath, backupPath := b.StatePaths(name)
 	log.Printf("[TRACE] backend/local: state manager for workspace %q will:\n - read initial snapshot from %s\n - write new snapshots to %s\n - create any backup at %s", name, statePath, stateOutPath, backupPath)
 
-	s := statemgr.NewFilesystemBetweenPaths(statePath, stateOutPath)
+	s := statemgr.NewFilesystemBetweenPaths(statePath, stateOutPath, b.encryption)
 	if backupPath != "" {
 		s.SetBackupPath(backupPath)
 	}
@@ -301,26 +309,33 @@ func (b *Local) Operation(ctx context.Context, op *backend.Operation) (*backend.
 	b.opLock.Lock()
 
 	// Build our running operation
-	// the runninCtx is only used to block until the operation returns.
-	runningCtx, done := context.WithCancel(context.Background())
+	// the runningCtx is only used to block until the operation returns. We
+	// intentionally detach it from any upstream cancellation because we
+	// need this to cancel only once our goroutine below is finished.
+	runningCtx, done := context.WithCancel(context.WithoutCancel(ctx))
 	runningOp := &backend.RunningOperation{
 		Context: runningCtx,
 	}
 
 	// stopCtx wraps the context passed in, and is used to signal a graceful Stop.
+	// This one _does_ inherit cancellations from the caller.
 	stopCtx, stop := context.WithCancel(ctx)
 	runningOp.Stop = stop
 
 	// cancelCtx is used to cancel the operation immediately, usually
-	// indicating that the process is exiting.
-	cancelCtx, cancel := context.WithCancel(context.Background())
+	// indicating that the process is exiting. This is intentionally
+	// detached from any upstream cancellation so that it will be
+	// cancelled only once our goroutine below is finished.
+	cancelCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	runningOp.Cancel = cancel
 
 	op.StateLocker = op.StateLocker.WithContext(stopCtx)
 
+	panicHandler := logging.PanicHandlerWithTraceFn()
+
 	// Do it
 	go func() {
-		defer logging.PanicHandler()
+		defer panicHandler()
 		defer done()
 		defer stop()
 		defer cancel()
@@ -334,7 +349,7 @@ func (b *Local) Operation(ctx context.Context, op *backend.Operation) (*backend.
 }
 
 // opWait waits for the operation to complete, and a stop signal or a
-// cancelation signal.
+// cancellation signal.
 func (b *Local) opWait(
 	doneCh <-chan struct{},
 	stopCtx context.Context,
@@ -348,14 +363,9 @@ func (b *Local) opWait(
 	case <-stopCtx.Done():
 		view.Stopping()
 
-		// We want to have a context that's guaranteed to be active that can be
-		// used to persist the state. Otherwise, if the operation is canceled
-		// or stopped before we can persist the state, we'll lose the state.
-		persistCtx := context.Background()
-
 		// try to force a PersistState just in case the process is terminated
 		// before we can complete.
-		if err := opStateMgr.PersistState(persistCtx, nil); err != nil {
+		if err := opStateMgr.PersistState(nil); err != nil {
 			// We can't error out from here, but warn the user if there was an error.
 			// If this isn't transient, we will catch it again below, and
 			// attempt to save the state another way.
@@ -435,9 +445,9 @@ func (b *Local) StatePaths(name string) (stateIn, stateOut, backupOut string) {
 // This should be used when "migrating" from one local backend configuration to
 // another in order to avoid deleting the "old" state snapshots if they are
 // in the same files as the "new" state snapshots.
-func (b *Local) PathsConflictWith(ctx context.Context, other *Local) bool {
+func (b *Local) PathsConflictWith(other *Local) bool {
 	otherPaths := map[string]struct{}{}
-	otherWorkspaces, err := other.Workspaces(ctx)
+	otherWorkspaces, err := other.Workspaces()
 	if err != nil {
 		// If we can't enumerate the workspaces then we'll conservatively
 		// assume that paths _do_ overlap, since we can't be certain.
@@ -448,7 +458,7 @@ func (b *Local) PathsConflictWith(ctx context.Context, other *Local) bool {
 		otherPaths[p] = struct{}{}
 	}
 
-	ourWorkspaces, err := other.Workspaces(ctx)
+	ourWorkspaces, err := other.Workspaces()
 	if err != nil {
 		// If we can't enumerate the workspaces then we'll conservatively
 		// assume that paths _do_ overlap, since we can't be certain.

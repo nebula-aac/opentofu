@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package addrs
@@ -432,7 +434,7 @@ func TestParseProviderSourceStr(t *testing.T) {
 	for name, test := range tests {
 		got, diags := ParseProviderSourceString(name)
 		for _, problem := range deep.Equal(got, test.Want) {
-			t.Errorf(problem)
+			t.Errorf("%s", problem)
 		}
 		if len(diags) > 0 {
 			if test.Err == false {

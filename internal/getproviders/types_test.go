@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package getproviders
@@ -139,6 +141,36 @@ func TestParsePlatform(t *testing.T) {
 		}
 		if got != test.Want {
 			t.Errorf("wrong\n got: %q\nwant: %q", got, test.Want)
+		}
+	}
+}
+
+func TestMeetingConstraints(t *testing.T) {
+	tests := []struct {
+		constraintStr string
+		versionStr    string
+		expected      bool
+	}{
+		// NOT PreRelease Version. This failed in apparentlymart/go-versions 1.0.1, and fixed in 1.0.2
+		{"!= 2.0.0-beta1, 2.0.0-beta1", "2.0.0-beta1", false},
+	}
+
+	for _, test := range tests {
+		vc, err := ParseVersionConstraints(test.constraintStr)
+		if err != nil {
+			t.Fatalf("ParseVersionConstraints failed: %v", err)
+		}
+
+		version, err := ParseVersion(test.versionStr)
+		if err != nil {
+			t.Fatalf("ParseVersion failed: %v", err)
+		}
+
+		versionSet := MeetingConstraints(vc)
+		result := versionSet.Has(version)
+
+		if result != test.expected {
+			t.Errorf("For constraint %s and version %s, expected %t, got %t", test.constraintStr, test.versionStr, test.expected, result)
 		}
 	}
 }

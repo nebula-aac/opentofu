@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package lang
@@ -6,6 +8,7 @@ package lang
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/opentofu/opentofu/internal/addrs"
@@ -13,9 +16,11 @@ import (
 	"github.com/opentofu/opentofu/internal/instances"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hcldec"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 
 	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/function"
 	ctyjson "github.com/zclconf/go-cty/cty/json"
 )
 
@@ -344,6 +349,20 @@ func TestScopeEvalContext(t *testing.T) {
 				"terraform": cty.ObjectVal(map[string]cty.Value{
 					"workspace": cty.StringVal("default"),
 				}),
+				"tofu": cty.ObjectVal(map[string]cty.Value{
+					"workspace": cty.StringVal("default"),
+				}),
+			},
+		},
+		{
+			`tofu.workspace`,
+			map[string]cty.Value{
+				"terraform": cty.ObjectVal(map[string]cty.Value{
+					"workspace": cty.StringVal("default"),
+				}),
+				"tofu": cty.ObjectVal(map[string]cty.Value{
+					"workspace": cty.StringVal("default"),
+				}),
 			},
 		},
 		{
@@ -416,6 +435,76 @@ func TestScopeEvalContext(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestScopeEvalContextWithParent tests if the resulting EvalCtx has correct parent.
+func TestScopeEvalContextWithParent(t *testing.T) {
+	t.Run("with-parent", func(t *testing.T) {
+		barStr, barFunc := cty.StringVal("bar"), function.New(&function.Spec{
+			Impl: func(_ []cty.Value, _ cty.Type) (cty.Value, error) {
+				return cty.NilVal, nil
+			},
+		})
+
+		scope, parent := &Scope{}, &hcl.EvalContext{
+			Variables: map[string]cty.Value{
+				"foo": barStr,
+			},
+			Functions: map[string]function.Function{
+				"foo": barFunc,
+			},
+		}
+
+		child, diags := scope.EvalContextWithParent(parent, nil)
+		if len(diags) != 0 {
+			t.Errorf("Unexpected diagnostics:")
+			for _, diag := range diags {
+				t.Errorf("- %s", diag)
+			}
+			return
+		}
+
+		if child.Parent() == nil {
+			t.Fatalf("Child EvalCtx has no parent")
+		}
+
+		if child.Parent() != parent {
+			t.Fatalf("Child EvalCtx has different parent:\n GOT:%v\nWANT:%v", child.Parent(), parent)
+		}
+
+		if ln := len(child.Parent().Variables); ln != 1 {
+			t.Fatalf("EvalContextWithParent modified parent's variables: incorrect length: %d", ln)
+		}
+
+		if v := child.Parent().Variables["foo"]; !v.RawEquals(barStr) {
+			t.Fatalf("EvalContextWithParent modified parent's variables:\n GOT:%v\nWANT:%v", v, barStr)
+		}
+
+		if ln := len(child.Parent().Functions); ln != 1 {
+			t.Fatalf("EvalContextWithParent modified parent's functions: incorrect length: %d", ln)
+		}
+
+		if v := child.Parent().Functions["foo"]; !reflect.DeepEqual(v, barFunc) {
+			t.Fatalf("EvalContextWithParent modified parent's functions:\n GOT:%v\nWANT:%v", v, barFunc)
+		}
+	})
+
+	t.Run("zero-parent", func(t *testing.T) {
+		scope := &Scope{}
+
+		root, diags := scope.EvalContextWithParent(nil, nil)
+		if len(diags) != 0 {
+			t.Errorf("Unexpected diagnostics:")
+			for _, diag := range diags {
+				t.Errorf("- %s", diag)
+			}
+			return
+		}
+
+		if root.Parent() != nil {
+			t.Fatalf("Resulting EvalCtx has unexpected parent: %v", root.Parent())
+		}
+	})
 }
 
 func TestScopeExpandEvalBlock(t *testing.T) {
@@ -709,7 +798,6 @@ func TestScopeExpandEvalBlock(t *testing.T) {
 
 		})
 	}
-
 }
 
 func formattedJSONValue(val cty.Value) string {
@@ -812,6 +900,13 @@ func TestScopeEvalSelfBlock(t *testing.T) {
 				"num":  cty.NullVal(cty.Number),
 			},
 		},
+		{
+			Config: `attr = tofu.workspace`,
+			Want: map[string]cty.Value{
+				"attr": cty.StringVal("default"),
+				"num":  cty.NullVal(cty.Number),
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -845,6 +940,85 @@ func TestScopeEvalSelfBlock(t *testing.T) {
 					test.Config, gotVal, wantVal,
 				)
 			}
+		})
+	}
+}
+
+func Test_enhanceFunctionDiags(t *testing.T) {
+	tests := []struct {
+		Name    string
+		Config  string
+		Summary string
+		Detail  string
+	}{
+		{
+			"Missing builtin function",
+			"attr = missing_function(54)",
+			"Call to unknown function",
+			"There is no function named \"missing_function\".",
+		},
+		{
+			"Missing core function",
+			"attr = core::missing_function(54)",
+			"Call to unknown function",
+			"There is no builtin (core::) function named \"missing_function\".",
+		},
+		{
+			"Invalid prefix",
+			"attr = magic::missing_function(54)",
+			"Unknown function namespace",
+			"Function \"magic::missing_function\" does not exist within a valid namespace (provider,core)",
+		},
+		{
+			"Too many namespaces",
+			"attr = provider::foo::bar::extra::extra2::missing_function(54)",
+			"Invalid function format",
+			"invalid provider function \"provider::foo::bar::extra::extra2::missing_function\": expected provider::<name>::<function> or provider::<name>::<alias>::<function>",
+		},
+	}
+
+	schema := &configschema.Block{
+		Attributes: map[string]*configschema.Attribute{
+			"attr": {
+				Type: cty.String,
+			},
+		},
+	}
+	spec := schema.DecoderSpec()
+
+	for _, test := range tests {
+		t.Run(test.Name, func(t *testing.T) {
+			file, parseDiags := hclsyntax.ParseConfig([]byte(test.Config), "", hcl.Pos{Line: 1, Column: 1})
+			if len(parseDiags) != 0 {
+				t.Errorf("unexpected diagnostics during parse")
+				for _, diag := range parseDiags {
+					t.Errorf("- %s", diag)
+				}
+				return
+			}
+
+			body := file.Body
+
+			scope := &Scope{}
+
+			ctx, ctxDiags := scope.EvalContext(nil)
+			if ctxDiags.HasErrors() {
+				t.Fatalf("Unexpected ctxDiags, %#v", ctxDiags)
+			}
+
+			_, evalDiags := hcldec.Decode(body, spec, ctx)
+			diags := enhanceFunctionDiags(evalDiags)
+			if len(diags) != 1 {
+				t.Fatalf("Expected 1 diag, got %d", len(diags))
+			}
+			diag := diags[0]
+			if diag.Summary != test.Summary {
+				t.Fatalf("Expected Summary %q, got %q", test.Summary, diag.Summary)
+			}
+			if diag.Detail != test.Detail {
+				t.Fatalf("Expected Detail %q, got %q", test.Detail, diag.Detail)
+			}
+
 		})
 	}
 }

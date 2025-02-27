@@ -1,3 +1,8 @@
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package cloudplugin1
 
 import (
@@ -50,7 +55,7 @@ func (c GRPCCloudClient) Execute(args []string, stdout, stderr io.Writer) int {
 				return 1
 			}
 		} else if bytes := response.GetStderr(); len(bytes) > 0 {
-			fmt.Fprint(stderr, string(bytes))
+			_, err := fmt.Fprint(stderr, string(bytes))
 			if err != nil {
 				log.Printf("[ERROR] Failed to write cloudplugin output to stderr: %s", err)
 				return 1

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -32,6 +34,14 @@ func TestNodeRootVariableExecute(t *testing.T) {
 				SourceType: ValueFromUnknown,
 			},
 		}
+
+		ctx.ChecksState = checks.NewState(&configs.Config{
+			Module: &configs.Module{
+				Variables: map[string]*configs.Variable{
+					"foo": n.Config,
+				},
+			},
+		})
 
 		diags := n.Execute(ctx, walkApply)
 		if diags.HasErrors() {
@@ -116,7 +126,11 @@ func TestNodeRootVariableExecute(t *testing.T) {
 				Value:      cty.StringVal("5"),
 				SourceType: ValueFromUnknown,
 			},
-			Planning: true,
+		}
+
+		ref := &nodeVariableReference{
+			Addr:   n.Addr,
+			Config: n.Config,
 		}
 
 		ctx.ChecksState = checks.NewState(&configs.Config{
@@ -130,6 +144,20 @@ func TestNodeRootVariableExecute(t *testing.T) {
 		diags := n.Execute(ctx, walkApply)
 		if diags.HasErrors() {
 			t.Fatalf("unexpected error: %s", diags.Err())
+		}
+
+		g, err := ref.DynamicExpand(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error: %s", err)
+		}
+
+		for _, v := range g.Vertices() {
+			if ev, ok := v.(GraphNodeExecutable); ok {
+				diags = ev.Execute(ctx, walkApply)
+				if diags.HasErrors() {
+					t.Fatalf("unexpected error: %s", diags.Err())
+				}
+			}
 		}
 
 		if !ctx.SetRootModuleArgumentCalled {
@@ -167,6 +195,10 @@ func (f fakeHCLExpressionFunc) Value(ctx *hcl.EvalContext) (cty.Value, hcl.Diagn
 }
 
 func (f fakeHCLExpressionFunc) Variables() []hcl.Traversal {
+	return nil
+}
+
+func (f fakeHCLExpressionFunc) Functions() []hcl.Traversal {
 	return nil
 }
 

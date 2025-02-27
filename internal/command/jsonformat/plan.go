@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package jsonformat
@@ -62,6 +64,7 @@ func (plan Plan) renderHuman(renderer Renderer, mode plans.Mode, opts ...plans.Q
 	willPrintResourceChanges := false
 	counts := make(map[plans.Action]int)
 	importingCount := 0
+	forgettingCount := 0
 	var changes []diff
 	for _, diff := range diffs.changes {
 		action := jsonplan.UnmarshalActions(diff.change.Change.Actions)
@@ -78,6 +81,10 @@ func (plan Plan) renderHuman(renderer Renderer, mode plans.Mode, opts ...plans.Q
 
 		if diff.Importing() {
 			importingCount++
+		}
+
+		if action == plans.Forget {
+			forgettingCount++
 		}
 
 		// Don't count move-only changes
@@ -174,7 +181,6 @@ func (plan Plan) renderHuman(renderer Renderer, mode plans.Mode, opts ...plans.Q
 			}
 		}
 	}
-
 	if haveRefreshChanges {
 		renderer.Streams.Print(format.HorizontalRule(renderer.Colorize, renderer.Streams.Stdout.Columns()))
 		renderer.Streams.Println()
@@ -202,6 +208,9 @@ func (plan Plan) renderHuman(renderer Renderer, mode plans.Mode, opts ...plans.Q
 		if counts[plans.Read] > 0 {
 			renderer.Streams.Println(renderer.Colorize.Color(actionDescription(plans.Read)))
 		}
+		if counts[plans.Forget] > 0 {
+			renderer.Streams.Println(renderer.Colorize.Color(actionDescription(plans.Forget)))
+		}
 	}
 
 	if len(changes) > 0 {
@@ -220,12 +229,29 @@ func (plan Plan) renderHuman(renderer Renderer, mode plans.Mode, opts ...plans.Q
 		}
 
 		if importingCount > 0 {
+			if forgettingCount > 0 {
+				renderer.Streams.Printf(
+					renderer.Colorize.Color("\n[bold]Plan:[reset] %d to import, %d to add, %d to change, %d to destroy, %d to forget.\n"),
+					importingCount,
+					counts[plans.Create]+counts[plans.DeleteThenCreate]+counts[plans.CreateThenDelete],
+					counts[plans.Update],
+					counts[plans.Delete]+counts[plans.DeleteThenCreate]+counts[plans.CreateThenDelete],
+					forgettingCount)
+			} else {
+				renderer.Streams.Printf(
+					renderer.Colorize.Color("\n[bold]Plan:[reset] %d to import, %d to add, %d to change, %d to destroy.\n"),
+					importingCount,
+					counts[plans.Create]+counts[plans.DeleteThenCreate]+counts[plans.CreateThenDelete],
+					counts[plans.Update],
+					counts[plans.Delete]+counts[plans.DeleteThenCreate]+counts[plans.CreateThenDelete])
+			}
+		} else if forgettingCount > 0 {
 			renderer.Streams.Printf(
-				renderer.Colorize.Color("\n[bold]Plan:[reset] %d to import, %d to add, %d to change, %d to destroy.\n"),
-				importingCount,
+				renderer.Colorize.Color("\n[bold]Plan:[reset] %d to add, %d to change, %d to destroy, %d to forget.\n"),
 				counts[plans.Create]+counts[plans.DeleteThenCreate]+counts[plans.CreateThenDelete],
 				counts[plans.Update],
-				counts[plans.Delete]+counts[plans.DeleteThenCreate]+counts[plans.CreateThenDelete])
+				counts[plans.Delete]+counts[plans.DeleteThenCreate]+counts[plans.CreateThenDelete],
+				forgettingCount)
 		} else {
 			renderer.Streams.Printf(
 				renderer.Colorize.Color("\n[bold]Plan:[reset] %d to add, %d to change, %d to destroy.\n"),
@@ -270,7 +296,7 @@ func renderHumanDiffOutputs(renderer Renderer, outputs map[string]computed.Diff)
 	for _, key := range keys {
 		output := outputs[key]
 		if output.Action != plans.NoOp {
-			rendered = append(rendered, fmt.Sprintf("%s %-*s = %s", renderer.Colorize.Color(format.DiffActionSymbol(output.Action)), escapedKeyMaxLen, escapedKeys[key], output.RenderHuman(0, computed.NewRenderHumanOpts(renderer.Colorize))))
+			rendered = append(rendered, fmt.Sprintf("%s %-*s = %s", renderer.Colorize.Color(format.DiffActionSymbol(output.Action)), escapedKeyMaxLen, escapedKeys[key], output.RenderHuman(0, computed.NewRenderHumanOpts(renderer.Colorize, renderer.ShowSensitive))))
 		}
 	}
 	return strings.Join(rendered, "\n")
@@ -352,7 +378,12 @@ func renderHumanDiff(renderer Renderer, diff diff, cause string) (string, bool) 
 	var buf bytes.Buffer
 	buf.WriteString(renderer.Colorize.Color(resourceChangeComment(diff.change, action, cause)))
 
-	opts := computed.NewRenderHumanOpts(renderer.Colorize)
+	opts := computed.NewRenderHumanOpts(renderer.Colorize, renderer.ShowSensitive)
+
+	if action == plans.Forget {
+		opts.HideDiffActionSymbols = true
+		opts.OverrideNullSuffix = true
+	}
 	opts.ShowUnchangedChildren = diff.Importing()
 
 	buf.WriteString(fmt.Sprintf("%s %s %s", renderer.Colorize.Color(format.DiffActionSymbol(action)), resourceChangeHeader(diff.change), diff.diff.RenderHuman(0, opts)))
@@ -452,7 +483,20 @@ func resourceChangeComment(resource jsonplan.ResourceChange, action plans.Action
 			buf.WriteString(fmt.Sprintf("\n  # (because key [%s] is not in for_each map)", resource.Index))
 		}
 		if len(resource.Deposed) != 0 {
-			// Some extra context about this unusual situation.
+			// In the case where we partially failed to replace a resource
+			// configured with 'create_before_destroy' in a previous apply and
+			// the deposed instance is still in the state, we give some extra
+			// context about this unusual situation.
+			buf.WriteString("\n  # (left over from a partially-failed replacement of this instance)")
+		}
+	case plans.Forget:
+		buf.WriteString(fmt.Sprintf("[bold]  # %s[reset] will be removed from the OpenTofu state [bold][red]but will not be destroyed[reset]", dispAddr))
+
+		if len(resource.Deposed) != 0 {
+			// In the case where we partially failed to replace a resource
+			// configured with 'create_before_destroy' in a previous apply and
+			// the deposed instance is still in the state, we give some extra
+			// context about this unusual situation.
 			buf.WriteString("\n  # (left over from a partially-failed replacement of this instance)")
 		}
 	case plans.NoOp:
@@ -523,6 +567,9 @@ func actionDescription(action plans.Action) string {
 		return "[red]-[reset]/[green]+[reset] destroy and then create replacement"
 	case plans.Read:
 		return " [cyan]<=[reset] read (data resources)"
+	case plans.Forget:
+		return "  [red].[reset] forget"
+
 	default:
 		panic(fmt.Sprintf("unrecognized change type: %s", action.String()))
 	}

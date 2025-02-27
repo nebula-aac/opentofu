@@ -10,6 +10,7 @@
 // This library accepts either size of byte slice but always
 // returns 16-byte addresses.
 
+//nolint:cyclop,funlen,gochecknoglobals,gocritic,nonamedreturns,mnd // This file is copied from the Go codebase and intended to remain close to the original in case we need to backport changes.
 package ipaddr
 
 import (
@@ -50,7 +51,7 @@ func parseIPv4(s string) IP {
 		}
 		//
 		// NOTE: This correct check was added for go-1.17, but is a
-		// backwards-incompatible change for Terraform users, who might have
+		// backwards-incompatible change for OpenTofu users, who might have
 		// already written modules with leading zeroes.
 		//
 		//if c > 1 && s[0] == '0' {

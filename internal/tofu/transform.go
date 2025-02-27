@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -37,11 +39,14 @@ func (t *graphTransformerMulti) Transform(g *Graph) error {
 		if err := t.Transform(g); err != nil {
 			return err
 		}
-		if thisStepStr := g.StringWithNodeTypes(); thisStepStr != lastStepStr {
-			log.Printf("[TRACE] (graphTransformerMulti) Completed graph transform %T with new graph:\n%s  ------", t, logging.Indent(thisStepStr))
-			lastStepStr = thisStepStr
-		} else {
-			log.Printf("[TRACE] (graphTransformerMulti) Completed graph transform %T (no changes)", t)
+
+		if logging.IsDebugOrHigher() {
+			if thisStepStr := g.StringWithNodeTypes(); thisStepStr != lastStepStr {
+				log.Printf("[TRACE] (graphTransformerMulti) Completed graph transform %T with new graph:\n%s  ------", t, logging.Indent(thisStepStr))
+				lastStepStr = thisStepStr
+			} else {
+				log.Printf("[TRACE] (graphTransformerMulti) Completed graph transform %T (no changes)", t)
+			}
 		}
 	}
 

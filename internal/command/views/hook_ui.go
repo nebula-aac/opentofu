@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package views
@@ -36,13 +38,13 @@ func NewUiHook(view *View) *UiHook {
 type UiHook struct {
 	tofu.NilHook
 
-	view     *View
 	viewLock sync.Mutex
+	view     *View
 
 	periodicUiTimer time.Duration
 
-	resources     map[string]uiResourceState
 	resourcesLock sync.Mutex
+	resources     map[string]uiResourceState
 }
 
 var _ tofu.Hook = (*UiHook)(nil)
@@ -274,10 +276,11 @@ func (h *UiHook) PreRefresh(addr addrs.AbsResourceInstance, gen states.Generatio
 	if depKey, ok := gen.(states.DeposedKey); ok {
 		addrStr = fmt.Sprintf("%s (deposed object %s)", addrStr, depKey)
 	}
-
-	h.println(fmt.Sprintf(
-		h.view.colorize.Color("[reset][bold]%s: Refreshing state...%s"),
-		addrStr, stateIdSuffix))
+	if !h.view.concise {
+		h.println(fmt.Sprintf(
+			h.view.colorize.Color("[reset][bold]%s: Refreshing state...%s"),
+			addrStr, stateIdSuffix))
+	}
 	return tofu.HookActionContinue, nil
 }
 

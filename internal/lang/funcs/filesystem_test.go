@@ -1,19 +1,23 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package funcs
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	homedir "github.com/mitchellh/go-homedir"
-	"github.com/opentofu/opentofu/internal/lang/marks"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/function"
 	"github.com/zclconf/go-cty/cty/function/stdlib"
+
+	"github.com/opentofu/opentofu/internal/lang/marks"
 )
 
 func TestFile(t *testing.T) {
@@ -149,7 +153,7 @@ func TestTemplateFile(t *testing.T) {
 			cty.StringVal("testdata/recursive.tmpl"),
 			cty.MapValEmpty(cty.String),
 			cty.NilVal,
-			`testdata/recursive.tmpl:1,3-16: Error in function call; Call to function "templatefile" failed: cannot recursively call templatefile from inside templatefile call.`,
+			`maximum recursion depth 1024 reached in testdata/recursive.tmpl:1,3-16, testdata/recursive.tmpl:1,3-16 ... `,
 		},
 		{
 			cty.StringVal("testdata/list.tmpl"),
@@ -179,6 +183,21 @@ func TestTemplateFile(t *testing.T) {
 			cty.True, // since this template contains only an interpolation, its true value shines through
 			``,
 		},
+		{
+			// write to a sensitive file path that exists
+			cty.StringVal("testdata/hello.txt").Mark(marks.Sensitive),
+			cty.EmptyObjectVal,
+			cty.StringVal("Hello World").Mark(marks.Sensitive),
+			``,
+		},
+		{
+			cty.StringVal("testdata/bare.tmpl"),
+			cty.ObjectVal(map[string]cty.Value{
+				"val": cty.True.Mark(marks.Sensitive),
+			}),
+			cty.True.Mark(marks.Sensitive),
+			``,
+		},
 	}
 
 	templateFileFn := MakeTemplateFileFunc(".", func() map[string]function.Function {
@@ -192,7 +211,8 @@ func TestTemplateFile(t *testing.T) {
 		t.Run(fmt.Sprintf("TemplateFile(%#v, %#v)", test.Path, test.Vars), func(t *testing.T) {
 			got, err := templateFileFn.Call([]cty.Value{test.Path, test.Vars})
 
-			if argErr, ok := err.(function.ArgError); ok {
+			var argErr function.ArgError
+			if errors.As(err, &argErr) {
 				if argErr.Index < 0 || argErr.Index > 1 {
 					t.Errorf("ArgError index %d is out of range for templatefile (must be 0 or 1)", argErr.Index)
 				}
@@ -211,6 +231,50 @@ func TestTemplateFile(t *testing.T) {
 			}
 
 			if !got.RawEquals(test.Want) {
+				t.Errorf("wrong result\ngot:  %#v\nwant: %#v", got, test.Want)
+			}
+		})
+	}
+}
+
+func Test_templateMaxRecursionDepth(t *testing.T) {
+	tests := []struct {
+		Input string
+		Want  int
+		Err   string
+	}{
+		{
+			"",
+			1024,
+			``,
+		}, {
+			"4096",
+			4096,
+			``,
+		}, {
+			"apple",
+			-1,
+			`invalid value for TF_TEMPLATE_RECURSION_DEPTH: strconv.Atoi: parsing "apple": invalid syntax`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(fmt.Sprintf("templateMaxRecursion(%s)", test.Input), func(t *testing.T) {
+			os.Setenv("TF_TEMPLATE_RECURSION_DEPTH", test.Input)
+			got, err := templateMaxRecursionDepth()
+			if test.Err != "" {
+				if err == nil {
+					t.Fatal("succeeded; want error")
+				}
+				if got, want := err.Error(), test.Err; got != want {
+					t.Errorf("wrong error\ngot:  %s\nwant: %s", got, want)
+				}
+				return
+			} else if err != nil {
+				t.Fatalf("unexpected error: %s", err)
+			}
+
+			if got != test.Want {
 				t.Errorf("wrong result\ngot:  %#v\nwant: %#v", got, test.Want)
 			}
 		})
@@ -523,7 +587,7 @@ func TestFileBase64(t *testing.T) {
 		},
 		{
 			cty.StringVal("testdata/icon.png"),
-			cty.StringVal("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAMAAAAoLQ9TAAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAAq1BMVEX///9cTuVeUeRcTuZcTuZcT+VbSe1cTuVdT+MAAP9JSbZcT+VcTuZAQLFAQLJcTuVcTuZcUuBBQbA/P7JAQLJaTuRcT+RcTuVGQ7xAQLJVVf9cTuVcTuVGRMFeUeRbTeJcTuU/P7JeTeZbTOVcTeZAQLJBQbNAQLNaUORcTeZbT+VcTuRAQLNAQLRdTuRHR8xgUOdgUN9cTuVdTeRdT+VZTulcTuVAQLL///8+GmETAAAANnRSTlMApibw+osO6DcBB3fIX87+oRk3yehB0/Nj/gNs7nsTRv3dHmu//JYUMLVr3bssjxkgEK5CaxeK03nIAAAAAWJLR0QAiAUdSAAAAAlwSFlzAAADoQAAA6EBvJf9gwAAAAd0SU1FB+EEBRIQDxZNTKsAAACCSURBVBjTfc7JFsFQEATQQpCYxyBEzJ55rvf/f0ZHcyQLvelTd1GngEwWycs5+UISyKLraSi9geWKK9Gr1j7AeqOJVtt2XtD1Bchef2BjQDAcCTC0CsA4mihMtXw2XwgsV2sFw812F+4P3y2GdI6nn3FGSs//4HJNAXDzU4Dg/oj/E+bsEbhf5cMsAAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDE3LTA0LTA1VDE4OjE2OjE1KzAyOjAws5bLVQAAACV0RVh0ZGF0ZTptb2RpZnkAMjAxNy0wNC0wNVQxODoxNjoxNSswMjowMMLLc+kAAAAZdEVYdFNvZnR3YXJlAHd3dy5pbmtzY2FwZS5vcmeb7jwaAAAAC3RFWHRUaXRsZQBHcm91cJYfIowAAABXelRYdFJhdyBwcm9maWxlIHR5cGUgaXB0YwAAeJzj8gwIcVYoKMpPy8xJ5VIAAyMLLmMLEyMTS5MUAxMgRIA0w2QDI7NUIMvY1MjEzMQcxAfLgEigSi4A6hcRdPJCNZUAAAAASUVORK5CYII="),
+			cty.StringVal("iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAINSURBVHgBjZNdSBRRFMf/M7tttl9zsdBld7EbZdi6xRZR0UPUU0UvPaeLC71JHxCFWg+2RAkhNRVaSLELGRRIQYX41gci9Bz2UMSOkWgY7szO6vqxznVmxGFdd1f/cGDmnnN+5z/DuUAFERohetBKNbZyjQ5ndduxkPpay2vtC7ZabNseGJuTJ2VsJG8wfDV0sD7dc4ewia8ww3jef6g+5Qk0xorrOWtqMHzS48onoqenacvZ//C6tHXwJwM1+DAsSNI/R1wdH01an+D1h2/7dywkBrt/kRORLLY6WEl3R0MzOLxvlgyOkPNcVQ03r0595ldSjEbPLeKKuAtvvxCUk5G72deI5gstYOB2Gmf8arLpzDz6buWg5Kpx6vJejHx3Wz/s2w8XLokHoDjvYujjJ7RejFpQe+GEOp+GjtisDuPRlfSR98M5jE9twZ5wE14k2iB4PWadoqilAUqWh+DWTNDT9ixeDVXhz+INdFxrRTnxhS+9A3rDJG+CLFdBPyppDcCwL7iZCSqEbALASV1Jpz7dZgJWQFrJBiWjovf5S32B2NiahLFlkSMNqQdxmmY/fcyI/seU9b95xwzJSobd6+5hdaHjKbe+dKt9XPEEA7Q7sNR5vTlHzXTtQ/P8vvhM/i39jc9MjIqF9Vwpm8TXQPO8Pabb7CREkNNy5pHdkRVlSdr4MhWDCKWkUs0yuFTBNunfXEAAAAAASUVORK5CYII="),
 			false,
 		},
 		{

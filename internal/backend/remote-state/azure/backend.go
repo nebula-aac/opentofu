@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package azure
@@ -8,11 +10,14 @@ import (
 	"fmt"
 
 	"github.com/opentofu/opentofu/internal/backend"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/legacy/helper/schema"
 )
 
+const defaultTimeout = 300 // 5 minutes
+
 // New creates a new backend for Azure remote state.
-func New() backend.Backend {
+func New(enc encryption.StateEncryption) backend.Backend {
 	s := &schema.Backend{
 		Schema: map[string]*schema.Schema{
 			"storage_account_name": {
@@ -86,6 +91,20 @@ func New() backend.Backend {
 				Optional:    true,
 				Description: "A custom Endpoint used to access the Azure Resource Manager API's.",
 				DefaultFunc: schema.EnvDefaultFunc("ARM_ENDPOINT", ""),
+			},
+
+			"timeout_seconds": {
+				Type:        schema.TypeInt,
+				Optional:    true,
+				Description: "The timeout in seconds for initializing a client or retrieving a Blob or a Metadata from Azure.",
+				DefaultFunc: schema.EnvDefaultFunc("ARM_TIMEOUT_SECONDS", defaultTimeout),
+				ValidateFunc: func(v interface{}, _ string) ([]string, []error) {
+					value, ok := v.(int)
+					if !ok || value < 0 {
+						return nil, []error{fmt.Errorf("timeout_seconds expected to be a non-negative integer")}
+					}
+					return nil, nil
+				},
 			},
 
 			"subscription_id": {
@@ -180,13 +199,14 @@ func New() backend.Backend {
 		},
 	}
 
-	result := &Backend{Backend: s}
+	result := &Backend{Backend: s, encryption: enc}
 	result.Backend.ConfigureFunc = result.configure
 	return result
 }
 
 type Backend struct {
 	*schema.Backend
+	encryption encryption.StateEncryption
 
 	// The fields below are set from configure
 	armClient     *ArmClient
@@ -207,6 +227,7 @@ type BackendConfig struct {
 	ClientCertificatePath         string
 	ClientSecret                  string
 	CustomResourceManagerEndpoint string
+	TimeoutSeconds                int
 	MetadataHost                  string
 	Environment                   string
 	MsiEndpoint                   string
@@ -223,6 +244,7 @@ type BackendConfig struct {
 	UseAzureADAuthentication      bool
 }
 
+//nolint:errcheck //at this stage type conversion is safe
 func (b *Backend) configure(ctx context.Context) error {
 	if b.containerName != "" {
 		return nil
@@ -242,6 +264,7 @@ func (b *Backend) configure(ctx context.Context) error {
 		ClientCertificatePath:         data.Get("client_certificate_path").(string),
 		ClientSecret:                  data.Get("client_secret").(string),
 		CustomResourceManagerEndpoint: data.Get("endpoint").(string),
+		TimeoutSeconds:                data.Get("timeout_seconds").(int),
 		MetadataHost:                  data.Get("metadata_host").(string),
 		Environment:                   data.Get("environment").(string),
 		MsiEndpoint:                   data.Get("msi_endpoint").(string),
@@ -259,7 +282,7 @@ func (b *Backend) configure(ctx context.Context) error {
 		UseAzureADAuthentication:      data.Get("use_azuread_auth").(bool),
 	}
 
-	armClient, err := buildArmClient(ctx, config)
+	armClient, err := buildArmClient(context.TODO(), config)
 	if err != nil {
 		return err
 	}
