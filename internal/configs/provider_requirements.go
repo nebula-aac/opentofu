@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package configs
@@ -31,14 +33,16 @@ type RequiredProviders struct {
 }
 
 func decodeRequiredProvidersBlock(block *hcl.Block) (*RequiredProviders, hcl.Diagnostics) {
-	attrs, diags := block.Body.JustAttributes()
-	if diags.HasErrors() {
-		return nil, diags
-	}
-
 	ret := &RequiredProviders{
 		RequiredProviders: make(map[string]*RequiredProvider),
 		DeclRange:         block.DefRange,
+	}
+
+	attrs, diags := block.Body.JustAttributes()
+	if diags.HasErrors() {
+		// Returns an empty RequiredProvider to allow further validations to work properly,
+		// allowing to return all the diagnostics correctly.
+		return ret, diags
 	}
 
 	for name, attr := range attrs {

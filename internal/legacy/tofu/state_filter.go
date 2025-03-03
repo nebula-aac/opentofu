@@ -1,6 +1,9 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
+//nolint:gocognit,nestif // This legacy code is frozen from an older version of the codebase and will not be updated to pass any linters.
 package tofu
 
 import (
@@ -260,7 +263,7 @@ func (s StateFilterResultSlice) Less(i, j int) bool {
 		return addrA.Index < addrB.Index
 	}
 
-	// If the addresses are different it is just lexographic sorting
+	// If the addresses are different it is just lexicographic sorting
 	if a.Address != b.Address {
 		return a.Address < b.Address
 	}

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package states
@@ -10,6 +12,7 @@ import (
 	ctyjson "github.com/zclconf/go-cty/cty/json"
 
 	"github.com/opentofu/opentofu/internal/addrs"
+	"github.com/opentofu/opentofu/internal/lang/marks"
 )
 
 // ResourceInstanceObject is the local representation of a specific remote
@@ -35,7 +38,7 @@ type ResourceInstanceObject struct {
 	Status ObjectStatus
 
 	// Dependencies is a set of absolute address to other resources this
-	// instance dependeded on when it was applied. This is used to construct
+	// instance depended on when it was applied. This is used to construct
 	// the dependency relationships for an object whose configuration is no
 	// longer available, such as if it has been removed from configuration
 	// altogether, or is now deposed.
@@ -95,7 +98,15 @@ func (o *ResourceInstanceObject) Encode(ty cty.Type, schemaVersion uint64) (*Res
 	// If it contains marks, remove these marks before traversing the
 	// structure with UnknownAsNull, and save the PathValueMarks
 	// so we can save them in state.
-	val, pvm := o.Value.UnmarkDeepWithPaths()
+	val, allPVM := o.Value.UnmarkDeepWithPaths()
+
+	var sensitivePVM = make([]cty.PathValueMarks, 0, len(allPVM))
+
+	for _, pvm := range allPVM {
+		if _, ok := pvm.Marks[marks.Sensitive]; ok {
+			sensitivePVM = append(sensitivePVM, pvm)
+		}
+	}
 
 	// Our state serialization can't represent unknown values, so we convert
 	// them to nulls here. This is lossy, but nobody should be writing unknown
@@ -128,7 +139,7 @@ func (o *ResourceInstanceObject) Encode(ty cty.Type, schemaVersion uint64) (*Res
 	return &ResourceInstanceObjectSrc{
 		SchemaVersion:       schemaVersion,
 		AttrsJSON:           src,
-		AttrSensitivePaths:  pvm,
+		AttrSensitivePaths:  sensitivePVM,
 		Private:             o.Private,
 		Status:              o.Status,
 		Dependencies:        dependencies,

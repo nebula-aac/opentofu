@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package e2etest
@@ -13,7 +15,7 @@ import (
 	"github.com/opentofu/opentofu/internal/getproviders"
 )
 
-// TestProviderProtocols verifies that Terraform can execute provider plugins
+// TestProviderProtocols verifies that OpenTofu can execute provider plugins
 // with both supported protocol versions.
 func TestProviderProtocols(t *testing.T) {
 	if !canRunGoBuild {
@@ -26,7 +28,7 @@ func TestProviderProtocols(t *testing.T) {
 	}
 	t.Parallel()
 
-	tf := e2e.NewBinary(t, terraformBin, "testdata/provider-plugin")
+	tf := e2e.NewBinary(t, tofuBin, "testdata/provider-plugin")
 
 	// In order to do a decent end-to-end test for this case we will need a real
 	// enough provider plugin to try to run and make sure we are able to

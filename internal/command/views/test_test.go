@@ -1,6 +1,14 @@
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package views
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -657,7 +665,7 @@ Plan: 1 to add, 0 to change, 0 to destroy.
 									Namespace: "hashicorp",
 									Type:      "test",
 								},
-							})
+							}, addrs.NoKey)
 					}),
 					Config: &configs.Config{},
 					Providers: map[addrs.Provider]providers.ProviderSchema{
@@ -804,7 +812,7 @@ this time it is very bad
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 				state.SetResourceInstanceCurrent(
 					addrs.Resource{
 						Mode: addrs.ManagedResourceMode,
@@ -817,7 +825,7 @@ this time it is very bad
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 				state.SetResourceInstanceDeposed(
 					addrs.Resource{
 						Mode: addrs.ManagedResourceMode,
@@ -831,7 +839,7 @@ this time it is very bad
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 			}),
 			stdout: `
 Warning: first warning
@@ -844,7 +852,9 @@ some thing not very bad happened again
 `,
 			stderr: `
 OpenTofu left the following resources in state after executing
-main.tftest.hcl, and they need to be cleaned up manually:
+main.tftest.hcl, these left-over resources can be viewed by reading the
+statefile written to disk(errored_test.tfstate) and they need to be cleaned
+up manually:
   - test.bar
   - test.bar (0fcb640a)
   - test.foo
@@ -870,7 +880,7 @@ main.tftest.hcl, and they need to be cleaned up manually:
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 				state.SetResourceInstanceCurrent(
 					addrs.Resource{
 						Mode: addrs.ManagedResourceMode,
@@ -883,7 +893,7 @@ main.tftest.hcl, and they need to be cleaned up manually:
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 				state.SetResourceInstanceDeposed(
 					addrs.Resource{
 						Mode: addrs.ManagedResourceMode,
@@ -897,7 +907,7 @@ main.tftest.hcl, and they need to be cleaned up manually:
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 			}),
 			stdout: `
 Warning: first warning
@@ -916,10 +926,82 @@ Error: first error
 this time it is very bad
 
 OpenTofu left the following resources in state after executing
-main.tftest.hcl, and they need to be cleaned up manually:
+main.tftest.hcl, these left-over resources can be viewed by reading the
+statefile written to disk(errored_test.tfstate) and they need to be cleaned
+up manually:
   - test.bar
   - test.bar (0fcb640a)
   - test.foo
+`,
+		},
+		"state_null_resource_with_errors": {
+			diags: tfdiags.Diagnostics{
+				tfdiags.Sourceless(tfdiags.Warning, "first warning", "some thing not very bad happened"),
+				tfdiags.Sourceless(tfdiags.Warning, "second warning", "some thing not very bad happened again"),
+				tfdiags.Sourceless(tfdiags.Error, "first error", "this time it is very bad"),
+			},
+			file: &moduletest.File{Name: "main.tftest.hcl"},
+			state: states.BuildState(func(state *states.SyncState) {
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "null_resource",
+						Name: "failing_will_depend_on_me",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("null"),
+					}, addrs.NoKey)
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "null_resource",
+						Name: "failing",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+						Dependencies: []addrs.ConfigResource{
+							{
+								Module: []string{},
+								Resource: addrs.Resource{
+									Mode: addrs.ManagedResourceMode,
+									Type: "null_resource",
+									Name: "failing_will_depend_on_me",
+								},
+							},
+						},
+						CreateBeforeDestroy: false,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("null"),
+					}, addrs.NoKey)
+			}),
+			stdout: `
+Warning: first warning
+
+some thing not very bad happened
+
+Warning: second warning
+
+some thing not very bad happened again
+`,
+			stderr: `OpenTofu encountered an error destroying resources created while executing
+main.tftest.hcl.
+
+Error: first error
+
+this time it is very bad
+
+OpenTofu left the following resources in state after executing
+main.tftest.hcl, these left-over resources can be viewed by reading the
+statefile written to disk(errored_test.tfstate) and they need to be cleaned
+up manually:
+  - null_resource.failing
+  - null_resource.failing_will_depend_on_me
 `,
 		},
 	}
@@ -1014,7 +1096,7 @@ OpenTofu was in the process of creating the following resources for
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 
 					state.SetResourceInstanceCurrent(
 						addrs.AbsResourceInstance{
@@ -1028,7 +1110,7 @@ OpenTofu was in the process of creating the following resources for
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 				}),
 			},
 			created: nil,
@@ -1064,7 +1146,7 @@ test:
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 
 					state.SetResourceInstanceCurrent(
 						addrs.AbsResourceInstance{
@@ -1078,7 +1160,7 @@ test:
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 				}),
 			},
 			created: nil,
@@ -1114,7 +1196,7 @@ OpenTofu has already created the following resources for "setup_block" from
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 
 					state.SetResourceInstanceCurrent(
 						addrs.AbsResourceInstance{
@@ -1128,7 +1210,7 @@ OpenTofu has already created the following resources for "setup_block" from
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 				}),
 				nil: states.BuildState(func(state *states.SyncState) {
 					state.SetResourceInstanceCurrent(
@@ -1143,7 +1225,7 @@ OpenTofu has already created the following resources for "setup_block" from
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 
 					state.SetResourceInstanceCurrent(
 						addrs.AbsResourceInstance{
@@ -1157,7 +1239,7 @@ OpenTofu has already created the following resources for "setup_block" from
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 				}),
 			},
 			created: []*plans.ResourceInstanceChangeSrc{
@@ -1939,12 +2021,12 @@ func TestTestJSON_DestroySummary(t *testing.T) {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 			}),
 			want: []map[string]interface{}{
 				{
 					"@level":    "error",
-					"@message":  "OpenTofu left some resources in state after executing main.tftest.hcl/run_block, they need to be cleaned up manually.",
+					"@message":  "OpenTofu left some resources in state after executing main.tftest.hcl/run_block, these left-over resources can be viewed by reading the statefile written to disk(errored_test.tfstate) and they need to be cleaned up manually:",
 					"@module":   "tofu.ui",
 					"@testfile": "main.tftest.hcl",
 					"@testrun":  "run_block",
@@ -1978,7 +2060,7 @@ func TestTestJSON_DestroySummary(t *testing.T) {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 				state.SetResourceInstanceCurrent(
 					addrs.Resource{
 						Mode: addrs.ManagedResourceMode,
@@ -1991,7 +2073,7 @@ func TestTestJSON_DestroySummary(t *testing.T) {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 				state.SetResourceInstanceDeposed(
 					addrs.Resource{
 						Mode: addrs.ManagedResourceMode,
@@ -2005,12 +2087,12 @@ func TestTestJSON_DestroySummary(t *testing.T) {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 			}),
 			want: []map[string]interface{}{
 				{
 					"@level":    "error",
-					"@message":  "OpenTofu left some resources in state after executing main.tftest.hcl, they need to be cleaned up manually.",
+					"@message":  "OpenTofu left some resources in state after executing main.tftest.hcl, these left-over resources can be viewed by reading the statefile written to disk(errored_test.tfstate) and they need to be cleaned up manually:",
 					"@module":   "tofu.ui",
 					"@testfile": "main.tftest.hcl",
 					"test_cleanup": map[string]interface{}{
@@ -2075,7 +2157,7 @@ func TestTestJSON_DestroySummary(t *testing.T) {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 				state.SetResourceInstanceCurrent(
 					addrs.Resource{
 						Mode: addrs.ManagedResourceMode,
@@ -2088,7 +2170,7 @@ func TestTestJSON_DestroySummary(t *testing.T) {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 				state.SetResourceInstanceDeposed(
 					addrs.Resource{
 						Mode: addrs.ManagedResourceMode,
@@ -2102,12 +2184,12 @@ func TestTestJSON_DestroySummary(t *testing.T) {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 			}),
 			want: []map[string]interface{}{
 				{
 					"@level":    "error",
-					"@message":  "OpenTofu left some resources in state after executing main.tftest.hcl, they need to be cleaned up manually.",
+					"@message":  "OpenTofu left some resources in state after executing main.tftest.hcl, these left-over resources can be viewed by reading the statefile written to disk(errored_test.tfstate) and they need to be cleaned up manually:",
 					"@module":   "tofu.ui",
 					"@testfile": "main.tftest.hcl",
 					"test_cleanup": map[string]interface{}{
@@ -2121,6 +2203,107 @@ func TestTestJSON_DestroySummary(t *testing.T) {
 							},
 							map[string]interface{}{
 								"instance": "test.foo",
+							},
+						},
+					},
+					"type": "test_cleanup",
+				},
+				{
+					"@level":    "warn",
+					"@message":  "Warning: first warning",
+					"@module":   "tofu.ui",
+					"@testfile": "main.tftest.hcl",
+					"diagnostic": map[string]interface{}{
+						"detail":   "something not very bad happened",
+						"severity": "warning",
+						"summary":  "first warning",
+					},
+					"type": "diagnostic",
+				},
+				{
+					"@level":    "warn",
+					"@message":  "Warning: second warning",
+					"@module":   "tofu.ui",
+					"@testfile": "main.tftest.hcl",
+					"diagnostic": map[string]interface{}{
+						"detail":   "something not very bad happened again",
+						"severity": "warning",
+						"summary":  "second warning",
+					},
+					"type": "diagnostic",
+				},
+				{
+					"@level":    "error",
+					"@message":  "Error: first error",
+					"@module":   "tofu.ui",
+					"@testfile": "main.tftest.hcl",
+					"diagnostic": map[string]interface{}{
+						"detail":   "this time it is very bad",
+						"severity": "error",
+						"summary":  "first error",
+					},
+					"type": "diagnostic",
+				},
+			},
+		},
+		"state_null_resource_with_errors": {
+			diags: tfdiags.Diagnostics{
+				tfdiags.Sourceless(tfdiags.Warning, "first warning", "something not very bad happened"),
+				tfdiags.Sourceless(tfdiags.Warning, "second warning", "something not very bad happened again"),
+				tfdiags.Sourceless(tfdiags.Error, "first error", "this time it is very bad"),
+			},
+			file: &moduletest.File{Name: "main.tftest.hcl"},
+			state: states.BuildState(func(state *states.SyncState) {
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "null_resource",
+						Name: "failing_will_depend_on_me",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("null"),
+					}, addrs.NoKey)
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "null_resource",
+						Name: "failing",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+						Dependencies: []addrs.ConfigResource{
+							{
+								Module: []string{},
+								Resource: addrs.Resource{
+									Mode: addrs.ManagedResourceMode,
+									Type: "null_resource",
+									Name: "failing_will_depend_on_me",
+								},
+							},
+						},
+						CreateBeforeDestroy: false,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("null"),
+					}, addrs.NoKey)
+			}), want: []map[string]interface{}{
+				{
+					"@level":    "error",
+					"@message":  "OpenTofu left some resources in state after executing main.tftest.hcl, these left-over resources can be viewed by reading the statefile written to disk(errored_test.tfstate) and they need to be cleaned up manually:",
+					"@module":   "tofu.ui",
+					"@testfile": "main.tftest.hcl",
+					"test_cleanup": map[string]interface{}{
+						"failed_resources": []interface{}{
+							map[string]interface{}{
+								"instance": "null_resource.failing",
+							},
+							map[string]interface{}{
+								"instance": "null_resource.failing_will_depend_on_me",
 							},
 						},
 					},
@@ -2681,7 +2864,7 @@ func TestTestJSON_Run(t *testing.T) {
 									Namespace: "hashicorp",
 									Type:      "test",
 								},
-							})
+							}, addrs.NoKey)
 					}),
 					Config: &configs.Config{
 						Module: &configs.Module{},
@@ -2838,7 +3021,7 @@ func TestTestJSON_FatalInterruptSummary(t *testing.T) {
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 
 					state.SetResourceInstanceCurrent(
 						addrs.AbsResourceInstance{
@@ -2852,7 +3035,7 @@ func TestTestJSON_FatalInterruptSummary(t *testing.T) {
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 				}),
 			},
 			changes: nil,
@@ -2891,7 +3074,7 @@ func TestTestJSON_FatalInterruptSummary(t *testing.T) {
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 
 					state.SetResourceInstanceCurrent(
 						addrs.AbsResourceInstance{
@@ -2905,7 +3088,7 @@ func TestTestJSON_FatalInterruptSummary(t *testing.T) {
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 				}),
 			},
 			changes: nil,
@@ -2946,7 +3129,7 @@ func TestTestJSON_FatalInterruptSummary(t *testing.T) {
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 
 					state.SetResourceInstanceCurrent(
 						addrs.AbsResourceInstance{
@@ -2960,7 +3143,7 @@ func TestTestJSON_FatalInterruptSummary(t *testing.T) {
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 				}),
 				nil: states.BuildState(func(state *states.SyncState) {
 					state.SetResourceInstanceCurrent(
@@ -2975,7 +3158,7 @@ func TestTestJSON_FatalInterruptSummary(t *testing.T) {
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 
 					state.SetResourceInstanceCurrent(
 						addrs.AbsResourceInstance{
@@ -2989,7 +3172,7 @@ func TestTestJSON_FatalInterruptSummary(t *testing.T) {
 							},
 						},
 						&states.ResourceInstanceObjectSrc{},
-						addrs.AbsProviderConfig{})
+						addrs.AbsProviderConfig{}, addrs.NoKey)
 				}),
 			},
 			changes: []*plans.ResourceInstanceChangeSrc{
@@ -3069,6 +3252,325 @@ func TestTestJSON_FatalInterruptSummary(t *testing.T) {
 
 			view.FatalInterruptSummary(run, file, tc.states, tc.changes)
 			testJSONViewOutputEquals(t, done(t).All(), tc.want)
+		})
+	}
+}
+
+func TestSaveErroredStateFile(t *testing.T) {
+	tcsHuman := map[string]struct {
+		state  *states.State
+		run    *moduletest.Run
+		file   *moduletest.File
+		stderr string
+		want   interface{}
+	}{
+		"state_foo_bar_human": {
+			file: &moduletest.File{Name: "main.tftest.hcl"},
+			state: states.BuildState(func(state *states.SyncState) {
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "test",
+						Name: "foo",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("test"),
+					}, addrs.NoKey)
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "test",
+						Name: "bar",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("test"),
+					}, addrs.NoKey)
+				state.SetResourceInstanceDeposed(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "test",
+						Name: "bar",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					"0fcb640a",
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("test"),
+					}, addrs.NoKey)
+			}),
+			stderr: `
+Writing state to file: errored_test.tfstate
+`,
+			want: nil,
+		},
+		"state_null_resource_human": {
+			file: &moduletest.File{Name: "main.tftest.hcl"},
+			state: states.BuildState(func(state *states.SyncState) {
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "null_resource",
+						Name: "failing_will_depend_on_me",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("null"),
+					}, addrs.NoKey)
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "null_resource",
+						Name: "failing",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+						Dependencies: []addrs.ConfigResource{
+							{
+								Module: []string{},
+								Resource: addrs.Resource{
+									Mode: addrs.ManagedResourceMode,
+									Type: "null_resource",
+									Name: "failing_will_depend_on_me",
+								},
+							},
+						},
+						CreateBeforeDestroy: false,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("null"),
+					}, addrs.NoKey)
+			}),
+			stderr: `
+Writing state to file: errored_test.tfstate
+`,
+			want: nil,
+		},
+	}
+
+	tcsJson := map[string]struct {
+		state  *states.State
+		run    *moduletest.Run
+		file   *moduletest.File
+		stderr string
+		want   interface{}
+	}{
+		"state_with_run_json": {
+			file: &moduletest.File{Name: "main.tftest.hcl"},
+			run:  &moduletest.Run{Name: "run_block"},
+			state: states.BuildState(func(state *states.SyncState) {
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "test",
+						Name: "foo",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("test"),
+					}, addrs.NoKey)
+			}),
+			stderr: "",
+			want: []map[string]interface{}{
+				{
+					"@level":   "info",
+					"@message": "Writing state to file: errored_test.tfstate",
+					"@module":  string("tofu.ui"),
+				},
+			},
+		},
+		"state_foo_bar_json": {
+			file: &moduletest.File{Name: "main.tftest.hcl"},
+			state: states.BuildState(func(state *states.SyncState) {
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "test",
+						Name: "foo",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("test"),
+					}, addrs.NoKey)
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "test",
+						Name: "bar",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("test"),
+					}, addrs.NoKey)
+				state.SetResourceInstanceDeposed(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "test",
+						Name: "bar",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					"0fcb640a",
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("test"),
+					}, addrs.NoKey)
+			}),
+			stderr: "",
+			want: []map[string]interface{}{
+				{
+					"@level":   "info",
+					"@message": "Writing state to file: errored_test.tfstate",
+					"@module":  "tofu.ui",
+				},
+			},
+		},
+		"state_null_resource_with_errors": {
+			file: &moduletest.File{Name: "main.tftest.hcl"},
+			state: states.BuildState(func(state *states.SyncState) {
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "null_resource",
+						Name: "failing_will_depend_on_me",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("null"),
+					}, addrs.NoKey)
+				state.SetResourceInstanceCurrent(
+					addrs.Resource{
+						Mode: addrs.ManagedResourceMode,
+						Type: "null_resource",
+						Name: "failing",
+					}.Instance(addrs.NoKey).Absolute(addrs.RootModuleInstance),
+					&states.ResourceInstanceObjectSrc{
+						Status: states.ObjectReady,
+						Dependencies: []addrs.ConfigResource{
+							{
+								Module: []string{},
+								Resource: addrs.Resource{
+									Mode: addrs.ManagedResourceMode,
+									Type: "null_resource",
+									Name: "failing_will_depend_on_me",
+								},
+							},
+						},
+						CreateBeforeDestroy: false,
+					},
+					addrs.AbsProviderConfig{
+						Module:   addrs.RootModule,
+						Provider: addrs.NewDefaultProvider("null"),
+					}, addrs.NoKey)
+			}),
+			stderr: "",
+			want: []map[string]interface{}{
+				{
+					"@level":   "info",
+					"@message": "Writing state to file: errored_test.tfstate",
+					"@module":  "tofu.ui",
+				},
+			},
+		},
+	}
+	// Run tests for Human view
+	runTestSaveErroredStateFile(t, tcsHuman, arguments.ViewHuman)
+
+	// Run tests for JSON view
+	runTestSaveErroredStateFile(t, tcsJson, arguments.ViewJSON)
+}
+
+func runTestSaveErroredStateFile(t *testing.T, tc map[string]struct {
+	state  *states.State
+	run    *moduletest.Run
+	file   *moduletest.File
+	stderr string
+	want   interface{}
+}, viewType arguments.ViewType) {
+	for name, data := range tc {
+		t.Run(name, func(t *testing.T) {
+			// Create a temporary directory
+			tempDir := t.TempDir()
+
+			// Modify the state file path to use the temporary directory
+			tempStateFilePath := filepath.Clean(filepath.Join(tempDir, "errored_test.tfstate"))
+
+			// Get the current working directory
+			originalDir, err := os.Getwd()
+			if err != nil {
+				t.Fatalf("Error getting current working directory: %v", err)
+			}
+
+			// Change the working directory to the temporary directory
+			if err := os.Chdir(tempDir); err != nil {
+				t.Fatalf("Error changing working directory: %v", err)
+			}
+			defer func() {
+				// Change the working directory back to the original directory after the test
+				if err := os.Chdir(originalDir); err != nil {
+					t.Fatalf("Error changing working directory back: %v", err)
+				}
+			}()
+
+			streams, done := terminal.StreamsForTesting(t)
+
+			if viewType == arguments.ViewHuman {
+				view := NewTest(arguments.ViewHuman, NewView(streams))
+				SaveErroredTestStateFile(data.state, data.run, data.file, view)
+				output := done(t)
+
+				actual, expected := output.Stderr(), data.stderr
+				if diff := cmp.Diff(expected, actual); len(diff) > 0 {
+					t.Errorf("expected:\n%s\nactual:\n%s\ndiff:\n%s", expected, actual, diff)
+				}
+			} else if viewType == arguments.ViewJSON {
+				view := NewTest(arguments.ViewJSON, NewView(streams))
+				SaveErroredTestStateFile(data.state, data.run, data.file, view)
+				want, ok := data.want.([]map[string]interface{})
+				if !ok {
+					t.Fatalf("Failed to assert want as []map[string]interface{}")
+				}
+				testJSONViewOutputEquals(t, done(t).All(), want)
+			} else {
+				t.Fatalf("Unsupported view type: %v", viewType)
+			}
+
+			// Check if the state file exists
+			if _, err := os.Stat(tempStateFilePath); os.IsNotExist(err) {
+				// File does not exist
+				t.Errorf("Expected state file 'errored_test.tfstate' to exist in: %s, but it does not.", tempDir)
+			}
+			// Trigger garbage collection to ensure that all open file handles are closed.
+			// This prevents TempDir RemoveAll cleanup errors on Windows.
+			if runtime.GOOS == "windows" {
+				runtime.GC()
+			}
 		})
 	}
 }

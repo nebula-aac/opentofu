@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package cloud
@@ -9,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/hashicorp/go-tfe"
 	tfemocks "github.com/hashicorp/go-tfe/mocks"
+	"go.uber.org/mock/gomock"
 )
 
 func MockAllTaskStages(t *testing.T, client *tfe.Client) (RunID string) {
@@ -131,7 +133,7 @@ func TestTaskStagesWithAllStages(t *testing.T) {
 	} {
 		if stage, ok := taskStages[stageName]; ok {
 			if stage.Stage != stageName {
-				t.Errorf("Expected task stage indexed by %s to find a Task Stage with the same index, but receieved %s", stageName, stage.Stage)
+				t.Errorf("Expected task stage indexed by %s to find a Task Stage with the same index, but received %s", stageName, stage.Stage)
 			}
 		} else {
 			t.Errorf("Expected task stage indexed by %s to exist, but it did not", stageName)

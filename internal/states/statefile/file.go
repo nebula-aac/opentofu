@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package statefile
@@ -6,6 +8,7 @@ package statefile
 import (
 	version "github.com/hashicorp/go-version"
 
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/states"
 	tfversion "github.com/opentofu/opentofu/version"
 )
@@ -32,6 +35,8 @@ type File struct {
 
 	// State is the actual state represented by this file.
 	State *states.State
+
+	EncryptionStatus encryption.EncryptionStatus
 }
 
 func New(state *states.State, lineage string, serial uint64) *File {
@@ -47,6 +52,7 @@ func New(state *states.State, lineage string, serial uint64) *File {
 		State:            state,
 		Lineage:          lineage,
 		Serial:           serial,
+		EncryptionStatus: encryption.StatusUnknown,
 	}
 }
 
@@ -61,5 +67,6 @@ func (f *File) DeepCopy() *File {
 		Serial:           f.Serial,
 		Lineage:          f.Lineage,
 		State:            f.State.DeepCopy(),
+		EncryptionStatus: f.EncryptionStatus,
 	}
 }

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package views
@@ -53,7 +55,7 @@ func TestShowHuman(t *testing.T) {
 				Redacted:  true,
 				Mode:      plans.NormalMode,
 				Qualities: []plans.Quality{},
-				RunHeader: "[reset][yellow]To view this run in a browser, visit:\nhttps://app.terraform.io/app/example_org/example_workspace/runs/run-run-bugsBUGSbugsBUGS[reset]",
+				RunHeader: "[reset][yellow]To view this run in a browser, visit:\nhttps://app.example.com/app/example_org/example_workspace/runs/run-run-bugsBUGSbugsBUGS[reset]",
 				RunFooter: "[reset][green]Run status: planned and saved (confirmable)[reset]\n[green]Workspace is unlocked[reset]",
 			},
 			nil,
@@ -139,7 +141,7 @@ func TestShowJSON(t *testing.T) {
 				Redacted:  false,
 				Mode:      plans.NormalMode,
 				Qualities: []plans.Quality{},
-				RunHeader: "[reset][yellow]To view this run in a browser, visit:\nhttps://app.terraform.io/app/example_org/example_workspace/runs/run-run-bugsBUGSbugsBUGS[reset]",
+				RunHeader: "[reset][yellow]To view this run in a browser, visit:\nhttps://app.example.com/app/example_org/example_workspace/runs/run-run-bugsBUGSbugsBUGS[reset]",
 				RunFooter: "[reset][green]Run status: planned and saved (confirmable)[reset]\n[green]Workspace is unlocked[reset]",
 			},
 			nil,
@@ -231,6 +233,7 @@ func testState() *states.State {
 				Provider: addrs.NewDefaultProvider("test"),
 				Module:   addrs.RootModule,
 			},
+			addrs.NoKey,
 		)
 		// DeepCopy is used here to ensure our synthetic state matches exactly
 		// with a state that will have been copied during the command

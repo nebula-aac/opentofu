@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package initwd
@@ -11,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/apparentlymart/go-versions/versions"
@@ -92,11 +95,11 @@ func NewModuleInstaller(modsDir string, loader *configload.Loader, reg *registry
 // If successful (the returned diagnostics contains no errors) then the
 // first return value is the early configuration tree that was constructed by
 // the installation process.
-func (i *ModuleInstaller) InstallModules(ctx context.Context, rootDir, testsDir string, upgrade, installErrsOnly bool, hooks ModuleInstallHooks) (*configs.Config, tfdiags.Diagnostics) {
+func (i *ModuleInstaller) InstallModules(ctx context.Context, rootDir, testsDir string, upgrade, installErrsOnly bool, hooks ModuleInstallHooks, call configs.StaticModuleCall) (*configs.Config, tfdiags.Diagnostics) {
 	log.Printf("[TRACE] ModuleInstaller: installing child modules for %s into %s", rootDir, i.modsDir)
 	var diags tfdiags.Diagnostics
 
-	rootMod, mDiags := i.loader.Parser().LoadConfigDirWithTests(rootDir, testsDir)
+	rootMod, mDiags := i.loader.Parser().LoadConfigDirWithTests(rootDir, testsDir, call)
 	if rootMod == nil {
 		// We drop the diagnostics here because we only want to report module
 		// loading errors after checking the core version constraints, which we
@@ -105,7 +108,7 @@ func (i *ModuleInstaller) InstallModules(ctx context.Context, rootDir, testsDir 
 	} else if vDiags := rootMod.CheckCoreVersionRequirements(nil, nil); vDiags.HasErrors() {
 		// If the core version requirements are not met, we drop any other
 		// diagnostics, as they may reflect language changes from future
-		// Terraform versions.
+		// OpenTofu versions.
 		diags = diags.Append(vDiags)
 	} else {
 		diags = diags.Append(mDiags)
@@ -238,7 +241,7 @@ func (i *ModuleInstaller) moduleInstallWalker(ctx context.Context, manifest mods
 				// keep our existing record.
 				info, err := os.Stat(record.Dir)
 				if err == nil && info.IsDir() {
-					mod, mDiags := i.loader.Parser().LoadConfigDir(record.Dir)
+					mod, mDiags := i.loader.Parser().LoadConfigDir(record.Dir, req.Call)
 					if mod == nil {
 						// nil indicates an unreadable module, which should never happen,
 						// so we return the full loader diagnostics here.
@@ -246,7 +249,7 @@ func (i *ModuleInstaller) moduleInstallWalker(ctx context.Context, manifest mods
 					} else if vDiags := mod.CheckCoreVersionRequirements(req.Path, req.SourceAddr); vDiags.HasErrors() {
 						// If the core version requirements are not met, we drop any other
 						// diagnostics, as they may reflect language changes from future
-						// Terraform versions.
+						// OpenTofu versions.
 						diags = diags.Extend(vDiags)
 					} else {
 						diags = diags.Extend(mDiags)
@@ -379,7 +382,7 @@ func (i *ModuleInstaller) installLocalModule(req *configs.ModuleRequest, key str
 	}
 
 	// Finally we are ready to try actually loading the module.
-	mod, mDiags := i.loader.Parser().LoadConfigDir(newDir)
+	mod, mDiags := i.loader.Parser().LoadConfigDir(newDir, req.Call)
 	if mod == nil {
 		// nil indicates missing or unreadable directory, so we'll
 		// discard the returned diags and return a more specific
@@ -392,7 +395,7 @@ func (i *ModuleInstaller) installLocalModule(req *configs.ModuleRequest, key str
 	} else if vDiags := mod.CheckCoreVersionRequirements(req.Path, req.SourceAddr); vDiags.HasErrors() {
 		// If the core version requirements are not met, we drop any other
 		// diagnostics, as they may reflect language changes from future
-		// Terraform versions.
+		// OpenTofu versions.
 		diags = diags.Extend(vDiags)
 	} else {
 		diags = diags.Extend(mDiags)
@@ -409,6 +412,11 @@ func (i *ModuleInstaller) installLocalModule(req *configs.ModuleRequest, key str
 
 	return mod, diags
 }
+
+// versionRegexp is used to handle edge cases around prerelease version constraints
+// when installing registry modules, its usage is discouraged in favor of the
+// public hashicorp/go-version API.
+var versionRegexp = regexp.MustCompile(version.VersionRegexpRaw)
 
 func (i *ModuleInstaller) installRegistryModule(ctx context.Context, req *configs.ModuleRequest, key string, instPath string, addr addrs.ModuleSourceRegistry, manifest modsdir.Manifest, hooks ModuleInstallHooks, fetcher *getmodules.PackageFetcher) (*configs.Module, *version.Version, hcl.Diagnostics) {
 	var diags hcl.Diagnostics
@@ -436,10 +444,15 @@ func (i *ModuleInstaller) installRegistryModule(ctx context.Context, req *config
 		resp, err = reg.ModuleVersions(ctx, regsrcAddr)
 		if err != nil {
 			if registry.IsModuleNotFound(err) {
+				suggestion := ""
+				if hostname == addrs.DefaultModuleRegistryHost {
+					suggestion = "\n\nIf you believe this module is missing from the registry, please submit a issue on the OpenTofu Registry https://github.com/opentofu/registry/issues/new/choose"
+				}
+
 				diags = diags.Append(&hcl.Diagnostic{
 					Severity: hcl.DiagError,
 					Summary:  "Module not found",
-					Detail:   fmt.Sprintf("Module %q (from %s:%d) cannot be found in the module registry at %s.", req.Name, req.CallRange.Filename, req.CallRange.Start.Line, hostname),
+					Detail:   fmt.Sprintf("Module %s (%q from %s:%d) cannot be found in the module registry at %s.%s", addr.Package.ForRegistryProtocol(), req.Name, req.CallRange.Filename, req.CallRange.Start.Line, hostname, suggestion),
 					Subject:  req.CallRange.Ptr(),
 				})
 			} else if errors.Is(err, context.Canceled) {
@@ -510,10 +523,57 @@ func (i *ModuleInstaller) installRegistryModule(ctx context.Context, req *config
 			// prerelease metadata will be checked. Users may not have even
 			// requested this prerelease so don't print lots of unnecessary #
 			// warnings.
-			acceptableVersions, err := versions.MeetingConstraintsString(req.VersionConstraint.Required.String())
+			//
+			// FIXME: Due to a historical implementation error, this is using the
+			// wrong version constraint parser: it's expecting npm/cargo-style
+			// syntax rather than the Ruby-style syntax OpenTofu otherwise
+			// uses. This should have been written to use
+			// versions.MeetingConstraintsStringRuby instead, but changing it
+			// now risks having OpenTofu select a prerelease in more situations
+			// than it did before, and so we need to understand the implications
+			// of that better before we improve this. For now that means that
+			// it's effectively disallowed to use anything other than a single
+			// exact version constraint to select a prerelease version: any attempt
+			// to combine a prerelease selection with another constraint will
+			// cause all prerelease versions to be excluded from the selection.
+			// For more information:
+			//     https://github.com/opentofu/opentofu/issues/2117
+			constraint := req.VersionConstraint.Required.String()
+			acceptableVersions, err := versions.MeetingConstraintsString(constraint)
 			if err != nil {
-				log.Printf("[WARN] ModuleInstaller: %s ignoring %s because the version constraints (%s) could not be parsed: %s", key, v, req.VersionConstraint.Required.String(), err.Error())
-				continue
+				// apparentlymart/go-versions purposely doesn't accept "v" prefixes.
+				// However, hashicorp/go-version does, which leads to inconsistent
+				// errors when specifying constraints that contain prerelease
+				// versions with "v" prefixes. This creates a semantically equivalent
+				// constraint with all prefixes stripped so it can be checked
+				// against apparentlymart/go-versions. This is definitely a hack but
+				// one we've accepted to minimize the risk of regressing the handling
+				// of any other version constraint input until we have developed a
+				// better understanding of what syntax is currently allowed for version
+				// constraints and how different constraints are handled.
+				//
+				// strippedConstraint should not live beyond this scope.
+				strippedConstraint := string(versionRegexp.ReplaceAllFunc([]byte(constraint), func(match []byte) []byte {
+					if match[0] == 'v' {
+						return match[1:]
+					}
+					return match
+				}))
+				if strippedConstraint != constraint {
+					log.Printf("[WARN] ModuleInstaller: %s (while evaluating %q) failed parsing, so will retry with 'v' prefixes removed (%s)\n    before: %s\n    after:  %s", key, v, err.Error(), constraint, strippedConstraint)
+					acceptableVersions, err = versions.MeetingConstraintsString(strippedConstraint)
+					if err != nil {
+						log.Printf("[WARN] ModuleInstaller: %s ignoring %q because the stripped version constraints (%q) could not be parsed either: %s", key, v, strippedConstraint, err.Error())
+						continue
+					}
+				} else {
+					// If the error here is "commas are not needed to separate version selections"
+					// then that's an expected (though highly unfortunate) consequence of the
+					// incorrect use of MeetingConstraintsString above. Refer to the earlier FIXME
+					// comment for more information.
+					log.Printf("[WARN] ModuleInstaller: %s ignoring %q because the version constraints (%q) could not be parsed: %s", key, v, strippedConstraint, err.Error())
+					continue
+				}
 			}
 
 			// Validate the version is also readable by the other versions
@@ -527,11 +587,12 @@ func (i *ModuleInstaller) installRegistryModule(ctx context.Context, req *config
 			// Finally, check if the prerelease is acceptable to version. As
 			// highlighted previously, we go through all of this because the
 			// apparentlymart/go-versions library handles prerelease constraints
-			// in the apporach we want to.
+			// in the approach we want to.
 			if !acceptableVersions.Has(version) {
 				log.Printf("[TRACE] ModuleInstaller: %s ignoring %s because it is a pre-release and was not requested exactly", key, v)
 				continue
 			}
+			log.Printf("[TRACE] ModuleInstaller: %s accepting %s because it is a pre-release that was requested exactly", key, v)
 
 			// If we reach here, it means this prerelease version was exactly
 			// requested according to the extra constraints of this library.
@@ -656,7 +717,7 @@ func (i *ModuleInstaller) installRegistryModule(ctx context.Context, req *config
 	log.Printf("[TRACE] ModuleInstaller: %s should now be at %s", key, modDir)
 
 	// Finally we are ready to try actually loading the module.
-	mod, mDiags := i.loader.Parser().LoadConfigDir(modDir)
+	mod, mDiags := i.loader.Parser().LoadConfigDir(modDir, req.Call)
 	if mod == nil {
 		// nil indicates missing or unreadable directory, so we'll
 		// discard the returned diags and return a more specific
@@ -671,7 +732,7 @@ func (i *ModuleInstaller) installRegistryModule(ctx context.Context, req *config
 	} else if vDiags := mod.CheckCoreVersionRequirements(req.Path, req.SourceAddr); vDiags.HasErrors() {
 		// If the core version requirements are not met, we drop any other
 		// diagnostics, as they may reflect language changes from future
-		// Terraform versions.
+		// OpenTofu versions.
 		diags = diags.Extend(vDiags)
 	} else {
 		diags = diags.Extend(mDiags)
@@ -757,7 +818,7 @@ func (i *ModuleInstaller) installGoGetterModule(ctx context.Context, req *config
 	log.Printf("[TRACE] ModuleInstaller: %s %q was downloaded to %s", key, addr, modDir)
 
 	// Finally we are ready to try actually loading the module.
-	mod, mDiags := i.loader.Parser().LoadConfigDir(modDir)
+	mod, mDiags := i.loader.Parser().LoadConfigDir(modDir, req.Call)
 	if mod == nil {
 		// nil indicates missing or unreadable directory, so we'll
 		// discard the returned diags and return a more specific
@@ -772,7 +833,7 @@ func (i *ModuleInstaller) installGoGetterModule(ctx context.Context, req *config
 	} else if vDiags := mod.CheckCoreVersionRequirements(req.Path, req.SourceAddr); vDiags.HasErrors() {
 		// If the core version requirements are not met, we drop any other
 		// diagnostics, as they may reflect language changes from future
-		// Terraform versions.
+		// OpenTofu versions.
 		diags = diags.Extend(vDiags)
 	} else {
 		diags = diags.Extend(mDiags)
@@ -894,7 +955,7 @@ func maybeImproveLocalInstallError(req *configs.ModuleRequest, diags hcl.Diagnos
 			// ...but we'll replace any errors with this more precise error.
 			var suggestion string
 			if strings.HasPrefix(packageAddr, "/") || filepath.VolumeName(packageAddr) != "" {
-				// It might be somewhat surprising that Terraform treats
+				// It might be somewhat surprising that OpenTofu treats
 				// absolute filesystem paths as "external" even though it
 				// treats relative paths as local, so if it seems like that's
 				// what the user was doing then we'll add an additional note

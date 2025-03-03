@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package getproviders
@@ -8,30 +10,16 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
-	"time"
 
+	openpgpErrors "github.com/ProtonMail/go-crypto/openpgp/errors"
 	tfaddr "github.com/opentofu/registry-address"
 
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
-	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
-
-func TestMain(m *testing.M) {
-	openpgpConfig = &packet.Config{
-		Time: func() time.Time {
-			// Scientifically chosen time that satisfies the validity periods of all
-			// of the keys and signatures used.
-			t, _ := time.Parse(time.RFC3339, "2021-04-25T16:00:00-07:00")
-			return t
-		},
-	}
-	os.Exit(m.Run())
-}
 
 func TestPackageAuthenticationResult(t *testing.T) {
 	tests := []struct {
@@ -256,6 +244,7 @@ func TestMatchingChecksumAuthentication_success(t *testing.T) {
 	auth := NewMatchingChecksumAuthentication(document, filename, wantSHA256Sum)
 	result, err := auth.AuthenticatePackage(location)
 
+	// NOTE: This also tests the expired key ignore logic as they key in the test is expired
 	if result != nil {
 		t.Errorf("wrong result: got %#v, want nil", result)
 	}
@@ -378,7 +367,7 @@ func TestSignatureAuthentication_success(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			auth := NewSignatureAuthentication([]byte(testShaSumsPlaceholder), signature, test.keys, nil)
+			auth := NewSignatureAuthentication(PackageMeta{Location: location}, []byte(testShaSumsPlaceholder), signature, test.keys, nil)
 			result, err := auth.AuthenticatePackage(location)
 
 			if result == nil || *result != test.result {
@@ -421,7 +410,7 @@ func TestNewSignatureAuthentication_success(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			auth := NewSignatureAuthentication([]byte(testProviderShaSums), signature, test.keys, nil)
+			auth := NewSignatureAuthentication(PackageMeta{Location: location}, []byte(testProviderShaSums), signature, test.keys, nil)
 			result, err := auth.AuthenticatePackage(location)
 
 			if result == nil || *result != test.result {
@@ -433,43 +422,21 @@ func TestNewSignatureAuthentication_success(t *testing.T) {
 		})
 	}
 }
-
-// Signature authentication can fail for many reasons, most of which are due
-// to OpenPGP failures from malformed keys or signatures.
-func TestSignatureAuthentication_failure(t *testing.T) {
+func TestNewSignatureAuthentication_expired(t *testing.T) {
 	tests := map[string]struct {
 		signature string
 		keys      []SigningKey
-		err       string
 	}{
-		"invalid key": {
+		"official provider": {
 			testHashicorpSignatureGoodBase64,
-			[]SigningKey{
-				{
-					ASCIIArmor: "invalid PGP armor value",
-				},
-			},
-			"error decoding signing key: openpgp: invalid argument: no armored data found",
-		},
-		"invalid signature": {
-			testSignatureBadBase64,
-			[]SigningKey{
-				{
-					ASCIIArmor: testAuthorKeyArmor,
-				},
-			},
-			"error checking signature: openpgp: invalid data: signature subpacket truncated",
-		},
-		"no keys match signature": {
-			testAuthorSignatureGoodBase64,
 			[]SigningKey{
 				{
 					ASCIIArmor: TestingPublicKey,
 				},
 			},
-			"authentication signature from unknown issuer",
 		},
 	}
+	t.Setenv(enforceGPGExpirationEnvName, "true")
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -481,21 +448,97 @@ func TestSignatureAuthentication_failure(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			auth := NewSignatureAuthentication([]byte(testShaSumsPlaceholder), signature, test.keys, nil)
+			auth := NewSignatureAuthentication(PackageMeta{Location: location}, []byte(testProviderShaSums), signature, test.keys, nil)
+			_, err = auth.AuthenticatePackage(location)
+
+			if err == nil {
+				t.Errorf("wrong err: got %s, want %s", err, openpgpErrors.ErrKeyExpired)
+			}
+		})
+	}
+	t.Setenv(enforceGPGExpirationEnvName, "")
+}
+
+// Signature authentication can fail for many reasons, most of which are due
+// to OpenPGP failures from malformed keys or signatures.
+func TestSignatureAuthentication_failure(t *testing.T) {
+	tests := map[string]struct {
+		signature    string
+		keys         []SigningKey
+		errorType    any
+		errorMessage string
+	}{
+		"invalid key": {
+			testHashicorpSignatureGoodBase64,
+			[]SigningKey{
+				{
+					ASCIIArmor: "invalid PGP armor value",
+				},
+			},
+			openpgpErrors.InvalidArgumentError(""),
+			"no armored data found",
+		},
+		"invalid signature": {
+			testSignatureBadBase64,
+			[]SigningKey{
+				{
+					ASCIIArmor: testAuthorKeyArmor,
+				},
+			},
+			openpgpErrors.InvalidArgumentError(""),
+			"signature subpacket truncated",
+		},
+		"no keys match signature": {
+			testAuthorSignatureGoodBase64,
+			[]SigningKey{
+				{
+					ASCIIArmor: TestingPublicKey,
+				},
+			},
+			nil,
+			ErrUnknownIssuer.Error(),
+		},
+	}
+
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			// Location is unused
+			location := PackageLocalArchive("testdata/my-package.zip")
+
+			signature, err := base64.StdEncoding.DecodeString(test.signature)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			auth := NewSignatureAuthentication(PackageMeta{Location: location}, []byte(testShaSumsPlaceholder), signature, test.keys, nil)
 			result, err := auth.AuthenticatePackage(location)
 
 			if result != nil {
 				t.Errorf("wrong result: got %#v, want nil", result)
 			}
-			if gotErr := err.Error(); gotErr != test.err {
-				t.Errorf("wrong err: got %s, want %s", gotErr, test.err)
+			if test.errorType != nil {
+				if err == nil {
+					t.Errorf("expected error of type %v, got nil", test.errorType)
+				}
+				if !errors.As(err, &test.errorType) {
+					t.Errorf("wrong error type: got %v, want %v", err, test.errorType)
+				}
+			}
+			if test.errorMessage != "" {
+				if err == nil {
+					t.Errorf("expected error of type %v, got nil", test.errorType)
+				}
+				if !strings.Contains(err.Error(), test.errorMessage) {
+					t.Errorf("wrong error message: %s (expected an error message containing %s)", err.Error(), test.errorMessage)
+				}
 			}
 		})
 	}
 }
 
 func TestSignatureAuthentication_acceptableHashes(t *testing.T) {
-	auth := NewSignatureAuthentication([]byte(testShaSumsRealistic), nil, nil, nil)
+	auth := NewSignatureAuthentication(PackageMeta{}, []byte(testShaSumsRealistic), nil, nil, nil)
 	authWithHashes, ok := auth.(PackageAuthenticationHashes)
 	if !ok {
 		t.Fatalf("%T does not implement PackageAuthenticationHashes", auth)
@@ -854,10 +897,7 @@ func TestShouldEnforceGPGValidation(t *testing.T) {
 				t.Setenv(enforceGPGValidationEnvName, tt.envVarValue)
 			}
 
-			actual, err := sigAuth.shouldEnforceGPGValidation()
-			if err != nil {
-				t.Fatal(err)
-			}
+			actual := sigAuth.shouldEnforceGPGValidation()
 			if actual != tt.expected {
 				t.Errorf("expected %t, actual %t", tt.expected, actual)
 			}

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package consul
@@ -13,6 +15,7 @@ import (
 
 	"github.com/hashicorp/consul/sdk/testutil"
 	"github.com/opentofu/opentofu/internal/backend"
+	"github.com/opentofu/opentofu/internal/encryption"
 )
 
 func TestBackend_impl(t *testing.T) {
@@ -49,16 +52,17 @@ func newConsulTestServer(t *testing.T) *testutil.TestServer {
 
 func TestBackend(t *testing.T) {
 	srv := newConsulTestServer(t)
+	defer func() { _ = srv.Stop() }()
 
 	path := fmt.Sprintf("tf-unit/%s", time.Now().String())
 
 	// Get the backend. We need two to test locking.
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"address": srv.HTTPAddr,
 		"path":    path,
 	}))
 
-	b2 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b2 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"address": srv.HTTPAddr,
 		"path":    path,
 	}))
@@ -70,17 +74,18 @@ func TestBackend(t *testing.T) {
 
 func TestBackend_lockDisabled(t *testing.T) {
 	srv := newConsulTestServer(t)
+	defer func() { _ = srv.Stop() }()
 
 	path := fmt.Sprintf("tf-unit/%s", time.Now().String())
 
 	// Get the backend. We need two to test locking.
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"address": srv.HTTPAddr,
 		"path":    path,
 		"lock":    false,
 	}))
 
-	b2 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b2 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"address": srv.HTTPAddr,
 		"path":    path + "different", // Diff so locking test would fail if it was locking
 		"lock":    false,
@@ -93,9 +98,10 @@ func TestBackend_lockDisabled(t *testing.T) {
 
 func TestBackend_gzip(t *testing.T) {
 	srv := newConsulTestServer(t)
+	defer func() { _ = srv.Stop() }()
 
 	// Get the backend
-	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"address": srv.HTTPAddr,
 		"path":    fmt.Sprintf("tf-unit/%s", time.Now().String()),
 		"gzip":    true,

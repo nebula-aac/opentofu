@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package statemgr
 
 import (
-	"context"
 	"reflect"
 	"testing"
 
@@ -26,9 +27,7 @@ import (
 func TestFull(t *testing.T, s Full) {
 	t.Helper()
 
-	ctx := context.Background()
-
-	if err := s.RefreshState(ctx); err != nil {
+	if err := s.RefreshState(); err != nil {
 		t.Fatalf("err: %s", err)
 	}
 
@@ -62,12 +61,12 @@ func TestFull(t *testing.T, s Full) {
 	}
 
 	// Test persistence
-	if err := s.PersistState(ctx, nil); err != nil {
+	if err := s.PersistState(nil); err != nil {
 		t.Fatalf("err: %s", err)
 	}
 
 	// Refresh if we got it
-	if err := s.RefreshState(ctx); err != nil {
+	if err := s.RefreshState(); err != nil {
 		t.Fatalf("err: %s", err)
 	}
 
@@ -87,7 +86,7 @@ func TestFull(t *testing.T, s Full) {
 	if err := s.WriteState(current); err != nil {
 		t.Fatalf("err: %s", err)
 	}
-	if err := s.PersistState(ctx, nil); err != nil {
+	if err := s.PersistState(nil); err != nil {
 		t.Fatalf("err: %s", err)
 	}
 
@@ -110,7 +109,7 @@ func TestFull(t *testing.T, s Full) {
 	if err := s.WriteState(current); err != nil {
 		t.Fatalf("err: %s", err)
 	}
-	if err := s.PersistState(ctx, nil); err != nil {
+	if err := s.PersistState(nil); err != nil {
 		t.Fatalf("err: %s", err)
 	}
 

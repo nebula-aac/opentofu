@@ -1,6 +1,9 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
+//nolint:cyclop,funlen // This legacy code is frozen from an older version of the codebase and will not be updated to pass any linters.
 package tofu
 
 import (
@@ -57,7 +60,7 @@ var rootModulePath = []string{"root"}
 // normalizeModulePath takes a raw module path and returns a path that
 // has the rootModulePath prepended to it. If I could go back in time I
 // would've never had a rootModulePath (empty path would be root). We can
-// still fix this but thats a big refactor that my branch doesn't make sense
+// still fix this but that's a big refactor that my branch doesn't make sense
 // for. Instead, this function normalizes paths.
 func normalizeModulePath(p []string) addrs.ModuleInstance {
 	// FIXME: Remove this once everyone is using addrs.ModuleInstance.
@@ -110,10 +113,9 @@ type State struct {
 	// configuration.
 	Backend *BackendState `json:"backend,omitempty"`
 
+	mu sync.Mutex
 	// Modules contains all the modules in a breadth-first order
 	Modules []*ModuleState `json:"modules"`
-
-	mu sync.Mutex
 }
 
 func (s *State) Lock()   { s.mu.Lock() }
@@ -617,9 +619,9 @@ func (s *State) DeepCopy() *State {
 	return copy.(*State)
 }
 
-// FromFutureTerraform checks if this state was written by a OpenTofu
+// FromFutureTofu checks if this state was written by a OpenTofu
 // version from the future.
-func (s *State) FromFutureTerraform() bool {
+func (s *State) FromFutureTofu() bool {
 	s.Lock()
 	defer s.Unlock()
 
@@ -811,7 +813,7 @@ func (s *BackendState) SetConfig(val cty.Value, schema *configschema.Block) erro
 	return nil
 }
 
-// ForPlan produces an alternative representation of the reciever that is
+// ForPlan produces an alternative representation of the receiver that is
 // suitable for storing in a plan. The current workspace must additionally
 // be provided, to be stored alongside the backend configuration.
 //
@@ -835,11 +837,10 @@ type RemoteState struct {
 	// Type controls the client we use for the remote state
 	Type string `json:"type"`
 
+	mu sync.Mutex
 	// Config is used to store arbitrary configuration that
 	// is type specific
 	Config map[string]string `json:"config"`
-
-	mu sync.Mutex
 }
 
 func (s *RemoteState) Lock()   { s.mu.Lock() }
@@ -964,7 +965,7 @@ func (s *OutputState) deepcopy() *OutputState {
 // module.
 type ModuleState struct {
 	// Path is the import path from the root module. Modules imports are
-	// always disjoint, so the path represents amodule tree
+	// always disjoint, so the path represents a module tree
 	Path []string `json:"path"`
 
 	// Locals are kept only transiently in-memory, because we can always
@@ -1619,6 +1620,7 @@ type InstanceState struct {
 	// and is only meant as a lookup mechanism for the providers.
 	ID string `json:"id"`
 
+	mu sync.Mutex
 	// Attributes are basic information about the resource. Any keys here
 	// are accessible in variable format within OpenTofu configurations:
 	// ${resourcetype.name.attribute}.
@@ -1639,8 +1641,6 @@ type InstanceState struct {
 
 	// Tainted is used to mark a resource for recreation.
 	Tainted bool `json:"tainted"`
-
-	mu sync.Mutex
 }
 
 func (s *InstanceState) Lock()   { s.mu.Lock() }
@@ -2071,7 +2071,7 @@ func ReadStateV2(jsonBytes []byte) (*State, error) {
 		}
 	}
 
-	// catch any unitialized fields in the state
+	// catch any uninitialized fields in the state
 	state.init()
 
 	// Sort it
@@ -2106,13 +2106,13 @@ func ReadStateV3(jsonBytes []byte) (*State, error) {
 		}
 	}
 
-	// catch any unitialized fields in the state
+	// catch any uninitialized fields in the state
 	state.init()
 
 	// Sort it
 	state.sort()
 
-	// Now we write the state back out to detect any changes in normaliztion.
+	// Now we write the state back out to detect any changes in normalization.
 	// If our state is now written out differently, bump the serial number to
 	// prevent conflicts.
 	var buf bytes.Buffer

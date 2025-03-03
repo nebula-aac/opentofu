@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package repl
@@ -12,7 +14,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-// FormatValue formats a value in a way that resembles Terraform language syntax
+// FormatValue formats a value in a way that resembles OpenTofu language syntax
 // and uses the type conversion functions where necessary to indicate exactly
 // what type it is given, so that equality test failures can be quickly
 // understood.
@@ -24,25 +26,7 @@ func FormatValue(v cty.Value, indent int) string {
 		return "(sensitive value)"
 	}
 	if v.IsNull() {
-		ty := v.Type()
-		switch {
-		case ty == cty.DynamicPseudoType:
-			return "null"
-		case ty == cty.String:
-			return "tostring(null)"
-		case ty == cty.Number:
-			return "tonumber(null)"
-		case ty == cty.Bool:
-			return "tobool(null)"
-		case ty.IsListType():
-			return fmt.Sprintf("tolist(null) /* of %s */", ty.ElementType().FriendlyName())
-		case ty.IsSetType():
-			return fmt.Sprintf("toset(null) /* of %s */", ty.ElementType().FriendlyName())
-		case ty.IsMapType():
-			return fmt.Sprintf("tomap(null) /* of %s */", ty.ElementType().FriendlyName())
-		default:
-			return fmt.Sprintf("null /* %s */", ty.FriendlyName())
-		}
+		return formatNullValue(v.Type())
 	}
 
 	ty := v.Type()
@@ -80,10 +64,32 @@ func FormatValue(v cty.Value, indent int) string {
 	return fmt.Sprintf("%#v", v)
 }
 
+func formatNullValue(ty cty.Type) string {
+	switch {
+	case ty == cty.DynamicPseudoType:
+		return "null"
+	case ty == cty.String:
+		return "tostring(null)"
+	case ty == cty.Number:
+		return "tonumber(null)"
+	case ty == cty.Bool:
+		return "tobool(null)"
+	case ty.IsListType():
+		return fmt.Sprintf("tolist(null) /* of %s */", ty.ElementType().FriendlyName())
+	case ty.IsSetType():
+		return fmt.Sprintf("toset(null) /* of %s */", ty.ElementType().FriendlyName())
+	case ty.IsMapType():
+		return fmt.Sprintf("tomap(null) /* of %s */", ty.ElementType().FriendlyName())
+	default:
+		return fmt.Sprintf("null /* %s */", ty.FriendlyName())
+	}
+}
+
 func formatMultilineString(v cty.Value, indent int) (string, bool) {
+	const minimumLines = 2
 	str := v.AsString()
 	lines := strings.Split(str, "\n")
-	if len(lines) < 2 {
+	if len(lines) < minimumLines {
 		return "", false
 	}
 
@@ -104,7 +110,7 @@ OUTER:
 		for _, line := range lines {
 			// If the delimiter matches a line, extend it and start again
 			if strings.TrimSpace(line) == delimiter {
-				delimiter = delimiter + "_"
+				delimiter += "_"
 				continue OUTER
 			}
 		}

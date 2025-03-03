@@ -1,11 +1,11 @@
 package main
 
 import (
-	"context"
 	"io"
 	"log"
 	"os"
 
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/states/statemgr"
 )
 
@@ -16,15 +16,13 @@ func main() {
 		log.Fatal(os.Args[0], "statefile")
 	}
 
-	s := statemgr.NewFilesystem(os.Args[1])
+	s := statemgr.NewFilesystem(os.Args[1], encryption.StateEncryptionDisabled())
 
 	info := statemgr.NewLockInfo()
 	info.Operation = "test"
 	info.Info = "state locker"
 
-	ctx := context.Background()
-
-	_, err := s.Lock(ctx, info)
+	_, err := s.Lock(info)
 	if err != nil {
 		io.WriteString(os.Stderr, "lock failed")
 	}

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -999,7 +1001,7 @@ func TestInstanceDiffSame(t *testing.T) {
 			"",
 		},
 
-		// Innner computed set should allow outer change in key
+		// Inner computed set should allow outer change in key
 		{
 			&InstanceDiff{
 				Attributes: map[string]*ResourceAttrDiff{
@@ -1046,7 +1048,7 @@ func TestInstanceDiffSame(t *testing.T) {
 			"",
 		},
 
-		// Innner computed list should allow outer change in key
+		// Inner computed list should allow outer change in key
 		{
 			&InstanceDiff{
 				Attributes: map[string]*ResourceAttrDiff{

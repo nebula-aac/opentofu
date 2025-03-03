@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -17,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	plugin "github.com/hashicorp/go-plugin"
+	"github.com/hashicorp/go-plugin"
 	"github.com/hashicorp/terraform-svchost/disco"
 	"github.com/mitchellh/cli"
 	"github.com/mitchellh/colorstring"
@@ -211,6 +213,10 @@ type Meta struct {
 	targets     []addrs.Targetable
 	targetFlags []string
 
+	// Excludes for this context (private)
+	excludes     []addrs.Targetable
+	excludeFlags []string
+
 	// Internal fields
 	color bool
 	oldUi cli.Ui
@@ -250,20 +256,35 @@ type Meta struct {
 	//
 	// compactWarnings (-compact-warnings) selects a more compact presentation
 	// of warnings in the output when they are not accompanied by errors.
-	statePath        string
-	stateOutPath     string
-	backupPath       string
-	parallelism      int
-	stateLock        bool
-	stateLockTimeout time.Duration
-	forceInitCopy    bool
-	reconfigure      bool
-	migrateState     bool
-	compactWarnings  bool
+	//
+	// consolidateWarnings (-consolidate-warnings=false) disables consolodation
+	// of warnings in the output, printing all instances of a particular warning.
+	//
+	// consolidateErrors (-consolidate-errors=true) enables consolodation
+	// of errors in the output, printing a single instances of a particular warning.
+	statePath           string
+	stateOutPath        string
+	backupPath          string
+	parallelism         int
+	stateLock           bool
+	stateLockTimeout    time.Duration
+	forceInitCopy       bool
+	reconfigure         bool
+	migrateState        bool
+	compactWarnings     bool
+	consolidateWarnings bool
+	consolidateErrors   bool
 
 	// Used with commands which write state to allow users to write remote
 	// state even if the remote and local OpenTofu versions don't match.
 	ignoreRemoteVersion bool
+
+	outputInJSON bool
+
+	// Used to cache the root module rootModuleCallCache and known variables.
+	// This helps prevent duplicate errors/warnings.
+	rootModuleCallCache *configs.StaticModuleCall
+	inputVariableCache  map[string]backend.UnparsedVariableValue
 }
 
 type testingOverrides struct {
@@ -467,7 +488,7 @@ func (m *Meta) CommandContext() context.Context {
 // If the operation runs to completion then no error is returned even if the
 // operation itself is unsuccessful. Use the "Result" field of the
 // returned operation object to recognize operation-level failure.
-func (m *Meta) RunOperation(b backend.Enhanced, opReq *backend.Operation) (*backend.RunningOperation, error) {
+func (m *Meta) RunOperation(ctx context.Context, b backend.Enhanced, opReq *backend.Operation) (*backend.RunningOperation, tfdiags.Diagnostics) {
 	if opReq.View == nil {
 		panic("RunOperation called with nil View")
 	}
@@ -475,9 +496,18 @@ func (m *Meta) RunOperation(b backend.Enhanced, opReq *backend.Operation) (*back
 		opReq.ConfigDir = m.normalizePath(opReq.ConfigDir)
 	}
 
-	op, err := b.Operation(context.Background(), opReq)
+	// Inject variables and root module call
+	var diags, callDiags tfdiags.Diagnostics
+	opReq.Variables, diags = m.collectVariableValues()
+	opReq.RootCall, callDiags = m.rootModuleCall(opReq.ConfigDir)
+	diags = diags.Append(callDiags)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	op, err := b.Operation(ctx, opReq)
 	if err != nil {
-		return nil, fmt.Errorf("error starting operation: %w", err)
+		return nil, diags.Append(fmt.Errorf("error starting operation: %w", err))
 	}
 
 	// Wait for the operation to complete or an interrupt to occur
@@ -504,7 +534,7 @@ func (m *Meta) RunOperation(b backend.Enhanced, opReq *backend.Operation) (*back
 			case <-time.After(5 * time.Second):
 			}
 
-			return nil, errors.New("operation canceled")
+			return nil, diags.Append(errors.New("operation canceled"))
 
 		case <-op.Done():
 			// operation completed after Stop
@@ -513,7 +543,7 @@ func (m *Meta) RunOperation(b backend.Enhanced, opReq *backend.Operation) (*back
 		// operation completed normally
 	}
 
-	return op, nil
+	return op, diags
 }
 
 // contextOpts returns the options to use to initialize a OpenTofu
@@ -568,9 +598,21 @@ func (m *Meta) defaultFlagSet(n string) *flag.FlagSet {
 func (m *Meta) ignoreRemoteVersionFlagSet(n string) *flag.FlagSet {
 	f := m.defaultFlagSet(n)
 
+	m.varFlagSet(f)
+
 	f.BoolVar(&m.ignoreRemoteVersion, "ignore-remote-version", false, "continue even if remote and local OpenTofu versions are incompatible")
 
 	return f
+}
+
+func (m *Meta) varFlagSet(f *flag.FlagSet) {
+	if m.variableArgs.items == nil {
+		m.variableArgs = newRawFlags("-var")
+	}
+	varValues := m.variableArgs.Alias("-var")
+	varFiles := m.variableArgs.Alias("-var-file")
+	f.Var(varValues, "var", "variables")
+	f.Var(varFiles, "var-file", "variable file")
 }
 
 // extendedFlagSet adds custom flags that are mostly used by commands
@@ -580,15 +622,12 @@ func (m *Meta) extendedFlagSet(n string) *flag.FlagSet {
 
 	f.BoolVar(&m.input, "input", true, "input")
 	f.Var((*FlagStringSlice)(&m.targetFlags), "target", "resource to target")
+	f.Var((*FlagStringSlice)(&m.excludeFlags), "exclude", "resource to exclude")
 	f.BoolVar(&m.compactWarnings, "compact-warnings", false, "use compact warnings")
+	f.BoolVar(&m.consolidateWarnings, "consolidate-warnings", true, "consolidate warnings")
+	f.BoolVar(&m.consolidateErrors, "consolidate-errors", false, "consolidate errors")
 
-	if m.variableArgs.items == nil {
-		m.variableArgs = newRawFlags("-var")
-	}
-	varValues := m.variableArgs.Alias("-var")
-	varFiles := m.variableArgs.Alias("-var-file")
-	f.Var(varValues, "var", "variables")
-	f.Var(varFiles, "var-file", "variable file")
+	m.varFlagSet(f)
 
 	// commands that bypass locking will supply their own flag on this var,
 	// but set the initial meta value to true as a failsafe.
@@ -637,8 +676,10 @@ func (m *Meta) process(args []string) []string {
 	// views.View and cli.Ui during the migration phase.
 	if m.View != nil {
 		m.View.Configure(&arguments.View{
-			CompactWarnings: m.compactWarnings,
-			NoColor:         !m.Color,
+			CompactWarnings:     m.compactWarnings,
+			ConsolidateWarnings: m.consolidateWarnings,
+			ConsolidateErrors:   m.consolidateErrors,
+			NoColor:             !m.Color,
 		})
 	}
 
@@ -683,6 +724,7 @@ func (m *Meta) confirm(opts *tofu.InputOpts) (bool, error) {
 // Internally this function uses Diagnostics.Append, and so it will panic
 // if given unsupported value types, just as Append does.
 func (m *Meta) showDiagnostics(vals ...interface{}) {
+
 	var diags tfdiags.Diagnostics
 	diags = diags.Append(vals...)
 	diags.Sort()
@@ -691,9 +733,20 @@ func (m *Meta) showDiagnostics(vals ...interface{}) {
 		return
 	}
 
+	if m.outputInJSON {
+		jsonView := views.NewJSONView(m.View)
+		jsonView.Diagnostics(diags)
+		return
+	}
+
 	outputWidth := m.ErrorColumns()
 
-	diags = diags.ConsolidateWarnings(1)
+	if m.consolidateWarnings {
+		diags = diags.Consolidate(1, tfdiags.Warning)
+	}
+	if m.consolidateErrors {
+		diags = diags.Consolidate(1, tfdiags.Error)
+	}
 
 	// Since warning messages are generally competing
 	if m.compactWarnings {
@@ -827,7 +880,13 @@ func (m *Meta) checkRequiredVersion() tfdiags.Diagnostics {
 		return diags
 	}
 
-	config, configDiags := loader.LoadConfig(pwd)
+	call, callDiags := m.rootModuleCall(pwd)
+	if callDiags.HasErrors() {
+		diags = diags.Append(callDiags)
+		return diags
+	}
+
+	config, configDiags := loader.LoadConfig(pwd, call)
 	if configDiags.HasErrors() {
 		diags = diags.Append(configDiags)
 		return diags

@@ -1,11 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package clistate
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,8 +22,6 @@ import (
 
 // LocalState manages a state storage that is local to the filesystem.
 type LocalState struct {
-	mu sync.Mutex
-
 	// Path is the path to read the state from. PathOut is the path to
 	// write the state to. If PathOut is not specified, Path will be used.
 	// If PathOut already exists, it will be overwritten.
@@ -42,6 +41,7 @@ type LocalState struct {
 	// hurt to remove file we never wrote to.
 	created bool
 
+	mu        sync.Mutex
 	state     *tofu.State
 	readState *tofu.State
 	written   bool
@@ -176,7 +176,7 @@ func (s *LocalState) RefreshState() error {
 }
 
 // Lock implements a local filesystem state.Locker.
-func (s *LocalState) Lock(ctx context.Context, info *statemgr.LockInfo) (string, error) {
+func (s *LocalState) Lock(info *statemgr.LockInfo) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -208,7 +208,7 @@ func (s *LocalState) Lock(ctx context.Context, info *statemgr.LockInfo) (string,
 	return s.lockID, s.writeLockInfo(info)
 }
 
-func (s *LocalState) Unlock(ctx context.Context, id string) error {
+func (s *LocalState) Unlock(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package modsdir
@@ -133,6 +135,7 @@ func ReadManifestSnapshotForDir(dir string) (Manifest, error) {
 		}
 		return nil, err
 	}
+	defer r.Close()
 	return ReadManifestSnapshot(r)
 }
 
@@ -177,5 +180,7 @@ func (m Manifest) WriteSnapshotToDir(dir string) error {
 	if err != nil {
 		return err
 	}
+	defer w.Close()
+
 	return m.WriteSnapshot(w)
 }

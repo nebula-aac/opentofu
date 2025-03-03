@@ -1,9 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -42,9 +45,11 @@ type graphWalkOpts struct {
 	PlanTimeTimestamp time.Time
 
 	MoveResults refactoring.MoveResults
+
+	ProviderFunctionTracker ProviderFunctionMapping
 }
 
-func (c *Context) walk(graph *Graph, operation walkOperation, opts *graphWalkOpts) (*ContextGraphWalker, tfdiags.Diagnostics) {
+func (c *Context) walk(ctx context.Context, graph *Graph, operation walkOperation, opts *graphWalkOpts) (*ContextGraphWalker, tfdiags.Diagnostics) {
 	log.Printf("[DEBUG] Starting graph walk: %s", operation.String())
 
 	walker := c.graphWalker(operation, opts)
@@ -53,7 +58,7 @@ func (c *Context) walk(graph *Graph, operation walkOperation, opts *graphWalkOpt
 	watchStop, watchWait := c.watchStop(walker)
 
 	// Walk the real graph, this will block until it completes
-	diags := graph.Walk(walker)
+	diags := graph.Walk(ctx, walker)
 
 	// Close the channel so the watcher stops, and wait for it to return.
 	close(watchStop)
@@ -138,17 +143,20 @@ func (c *Context) graphWalker(operation walkOperation, opts *graphWalkOpts) *Con
 	}
 
 	return &ContextGraphWalker{
-		Context:          c,
-		State:            state,
-		Config:           opts.Config,
-		RefreshState:     refreshState,
-		PrevRunState:     prevRunState,
-		Changes:          changes.SyncWrapper(),
-		Checks:           checkState,
-		InstanceExpander: instances.NewExpander(),
-		MoveResults:      opts.MoveResults,
-		Operation:        operation,
-		StopContext:      c.runContext,
-		PlanTimestamp:    opts.PlanTimeTimestamp,
+		Context:                 c,
+		State:                   state,
+		Config:                  opts.Config,
+		RefreshState:            refreshState,
+		PrevRunState:            prevRunState,
+		Changes:                 changes.SyncWrapper(),
+		Checks:                  checkState,
+		InstanceExpander:        instances.NewExpander(),
+		MoveResults:             opts.MoveResults,
+		ImportResolver:          NewImportResolver(),
+		Operation:               operation,
+		StopContext:             c.runContext,
+		PlanTimestamp:           opts.PlanTimeTimestamp,
+		Encryption:              c.encryption,
+		ProviderFunctionTracker: opts.ProviderFunctionTracker,
 	}
 }

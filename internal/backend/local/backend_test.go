@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package local
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,19 +14,20 @@ import (
 	"testing"
 
 	"github.com/opentofu/opentofu/internal/backend"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/states/statefile"
 	"github.com/opentofu/opentofu/internal/states/statemgr"
 )
 
 func TestLocal_impl(t *testing.T) {
-	var _ backend.Enhanced = New()
-	var _ backend.Local = New()
-	var _ backend.CLI = New()
+	var _ backend.Enhanced = New(encryption.StateEncryptionDisabled())
+	var _ backend.Local = New(encryption.StateEncryptionDisabled())
+	var _ backend.CLI = New(encryption.StateEncryptionDisabled())
 }
 
 func TestLocal_backend(t *testing.T) {
 	testTmpDir(t)
-	b := New()
+	b := New(encryption.StateEncryptionDisabled())
 	backend.TestBackendStates(t, b)
 	backend.TestBackendStateLocks(t, b, b)
 }
@@ -38,7 +40,7 @@ func checkState(t *testing.T, path, expected string) {
 		t.Fatalf("err: %s", err)
 	}
 
-	state, err := statefile.Read(f)
+	state, err := statefile.Read(f, encryption.StateEncryptionDisabled())
 	f.Close()
 	if err != nil {
 		t.Fatalf("err: %s", err)
@@ -52,7 +54,7 @@ func checkState(t *testing.T, path, expected string) {
 }
 
 func TestLocal_StatePaths(t *testing.T) {
-	b := New()
+	b := New(encryption.StateEncryptionDisabled())
 
 	// Test the defaults
 	path, out, back := b.StatePaths("")
@@ -97,10 +99,8 @@ func TestLocal_addAndRemoveStates(t *testing.T) {
 	dflt := backend.DefaultStateName
 	expectedStates := []string{dflt}
 
-	b := New()
-	ctx := context.Background()
-
-	states, err := b.Workspaces(ctx)
+	b := New(encryption.StateEncryptionDisabled())
+	states, err := b.Workspaces()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,11 +110,11 @@ func TestLocal_addAndRemoveStates(t *testing.T) {
 	}
 
 	expectedA := "test_A"
-	if _, err := b.StateMgr(ctx, expectedA); err != nil {
+	if _, err := b.StateMgr(expectedA); err != nil {
 		t.Fatal(err)
 	}
 
-	states, err = b.Workspaces(ctx)
+	states, err = b.Workspaces()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,11 +125,11 @@ func TestLocal_addAndRemoveStates(t *testing.T) {
 	}
 
 	expectedB := "test_B"
-	if _, err := b.StateMgr(ctx, expectedB); err != nil {
+	if _, err := b.StateMgr(expectedB); err != nil {
 		t.Fatal(err)
 	}
 
-	states, err = b.Workspaces(ctx)
+	states, err = b.Workspaces()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,11 +139,11 @@ func TestLocal_addAndRemoveStates(t *testing.T) {
 		t.Fatalf("expected %q, got %q", expectedStates, states)
 	}
 
-	if err := b.DeleteWorkspace(ctx, expectedA, true); err != nil {
+	if err := b.DeleteWorkspace(expectedA, true); err != nil {
 		t.Fatal(err)
 	}
 
-	states, err = b.Workspaces(ctx)
+	states, err = b.Workspaces()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,11 +153,11 @@ func TestLocal_addAndRemoveStates(t *testing.T) {
 		t.Fatalf("expected %q, got %q", expectedStates, states)
 	}
 
-	if err := b.DeleteWorkspace(ctx, expectedB, true); err != nil {
+	if err := b.DeleteWorkspace(expectedB, true); err != nil {
 		t.Fatal(err)
 	}
 
-	states, err = b.Workspaces(ctx)
+	states, err = b.Workspaces()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestLocal_addAndRemoveStates(t *testing.T) {
 		t.Fatalf("expected %q, got %q", expectedStates, states)
 	}
 
-	if err := b.DeleteWorkspace(ctx, dflt, true); err == nil {
+	if err := b.DeleteWorkspace(dflt, true); err == nil {
 		t.Fatal("expected error deleting default state")
 	}
 }
@@ -187,22 +187,22 @@ var errTestDelegateState = errors.New("state called")
 var errTestDelegateStates = errors.New("states called")
 var errTestDelegateDeleteState = errors.New("delete called")
 
-func (b *testDelegateBackend) StateMgr(_ context.Context, name string) (statemgr.Full, error) {
+func (b *testDelegateBackend) StateMgr(name string) (statemgr.Full, error) {
 	if b.stateErr {
 		return nil, errTestDelegateState
 	}
-	s := statemgr.NewFilesystem("terraform.tfstate")
+	s := statemgr.NewFilesystem("terraform.tfstate", encryption.StateEncryptionDisabled())
 	return s, nil
 }
 
-func (b *testDelegateBackend) Workspaces(context.Context) ([]string, error) {
+func (b *testDelegateBackend) Workspaces() ([]string, error) {
 	if b.statesErr {
 		return nil, errTestDelegateStates
 	}
 	return []string{"default"}, nil
 }
 
-func (b *testDelegateBackend) DeleteWorkspace(_ context.Context, name string, force bool) error {
+func (b *testDelegateBackend) DeleteWorkspace(name string, force bool) error {
 	if b.deleteErr {
 		return errTestDelegateDeleteState
 	}
@@ -216,19 +216,17 @@ func TestLocal_multiStateBackend(t *testing.T) {
 		stateErr:  true,
 		statesErr: true,
 		deleteErr: true,
-	})
+	}, nil)
 
-	ctx := context.Background()
-
-	if _, err := b.StateMgr(ctx, "test"); err != errTestDelegateState {
+	if _, err := b.StateMgr("test"); err != errTestDelegateState {
 		t.Fatal("expected errTestDelegateState, got:", err)
 	}
 
-	if _, err := b.Workspaces(ctx); err != errTestDelegateStates {
+	if _, err := b.Workspaces(); err != errTestDelegateStates {
 		t.Fatal("expected errTestDelegateStates, got:", err)
 	}
 
-	if err := b.DeleteWorkspace(ctx, "test", true); err != errTestDelegateDeleteState {
+	if err := b.DeleteWorkspace("test", true); err != errTestDelegateDeleteState {
 		t.Fatal("expected errTestDelegateDeleteState, got:", err)
 	}
 }

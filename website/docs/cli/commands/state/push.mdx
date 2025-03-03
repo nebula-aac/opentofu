@@ -5,7 +5,7 @@ description: The `tofu state push` command pushes items to the OpenTofu state.
 # Command: state push
 
 The `tofu state push` command is used to manually upload a local
-state file to [remote state](/docs/language/state/remote). This command also
+state file to [remote state](../../../language/state/remote.mdx). This command also
 works with local state.
 
 This command should rarely be used. It is meant only as a utility in case
@@ -16,14 +16,14 @@ manual intervention is necessary with the remote state.
 Usage: `tofu state push [options] PATH`
 
 This command pushes the state specified by PATH to the currently
-configured [backend](/docs/language/settings/backends/configuration).
+configured [backend](../../../language/settings/backends/configuration.mdx).
 
 If PATH is "-" then the state data to push is read from stdin. This data
 is loaded completely into memory and verified prior to being written to
 the destination state.
 
 :::note
-OpenTofu state files must be in UTF-8 format without a byte order mark (BOM). For PowerShell on Windows, use `Set-Content` to automatically encode files in UTF-8 format. For example, run `tofu state push | sc tofu.tfstate`.
+OpenTofu state files must be in UTF-8 format without a byte order mark (BOM). For PowerShell on Windows, use `Set-Content` to automatically encode files in UTF-8 format. For example, run `tofu state push | sc terraform.tfstate`.
 :::
 
 OpenTofu will perform a number of safety checks to prevent you from
@@ -43,7 +43,42 @@ Both of these safety checks can be disabled with the `-force` flag.
 **This is not recommended.** If you disable the safety checks and are
 pushing state, the destination state will be overwritten.
 
-For configurations using the [`cloud` backend](/docs/cli/cloud) or the [`remote` backend](/docs/language/settings/backends/remote)
-only, `tofu state push`
-also accepts the option
-[`-ignore-remote-version`](/docs/cli/cloud/command-line-arguments#ignore-remote-version).
+For configurations using the [`cloud` backend](../../../cli/cloud/index.mdx) or the [`remote` backend](../../../language/settings/backends/remote.mdx)
+only, `tofu state push` also accepts the option [`-ignore-remote-version`](/docs/cli/cloud/command-line-arguments#ignore-remote-version).
+
+:::note
+Use of variables in [module sources](../../../language/modules/sources.mdx#support-for-variable-and-local-evaluation),
+[backend configuration](../../../language/settings/backends/configuration.mdx#variables-and-locals),
+or [encryption block](../../../language/state/encryption.mdx#configuration)
+requires [assigning values to root module variables](../../../language/values/variables.mdx#assigning-values-to-root-module-variables)
+when running `tofu state push`.
+:::
+
+This command also accepts the following options for tofu state push:
+
+- `-lock=false` - Don't hold a state lock during the operation. This is
+  dangerous if others might concurrently run commands against the same
+  workspace.
+
+- `-lock-timeout=DURATION` - Unless locking is disabled with `-lock=false`,
+  instructs OpenTofu to retry acquiring a lock for a period of time before
+  returning an error. The duration syntax is a number followed by a time
+  unit letter, such as "3s" for three seconds.
+
+- [`ignore-remote-version`](../../../cli/cloud/command-line-arguments.mdx#ignore-remote-version).
+
+- `-var 'NAME=VALUE'` - Sets a value for a single
+  [input variable](../../../language/values/variables.mdx) declared in the
+  root module of the configuration. Use this option multiple times to set
+  more than one variable. Refer to
+  [Input Variables on the Command Line](../plan.mdx#input-variables-on-the-command-line) for more information.
+
+- `-var-file=FILENAME` - Sets values for potentially many
+  [input variables](../../../language/values/variables.mdx) declared in the
+  root module of the configuration, using definitions from a
+  ["tfvars" file](../../../language/values/variables.mdx#variable-definitions-tfvars-files).
+  Use this option multiple times to include values from more than one file.
+
+There are several other ways to set values for input variables in the root
+module, aside from the `-var` and `-var-file` options. Refer to
+[Assigning Values to Root Module Variables](../../../language/values/variables.mdx#assigning-values-to-root-module-variables) for more information.

@@ -2,6 +2,16 @@
 
 This directory contains the portions of [the OpenTofu website](https://opentofu.org) that pertain to the core functionality, excluding providers and the overall configuration.
 
+## Development server
+
+You can start a local development server with Docker by running the following command from this (the `website`) directory:
+
+```
+docker compose up --build
+```
+
+The development server will be available on http://localhost:3000/ .
+
 ## Suggesting Changes
 
 You can [submit an issue](https://github.com/opentofu/opentofu/issues/new/choose) with documentation requests or submit a pull request with suggested changes.
@@ -23,11 +33,7 @@ To update the sidebar navigation, you must edit the appropriate `nav-data.json` 
 Currently, you can preview your changes through the [opentofu/opentofu.org](https://github.com/opentofu/opentofu.org/blob/main/README.md) repository.
 
 Follow the [Getting Started](https://github.com/opentofu/opentofu.org/blob/main/README.md#getting-started) guide.
-If you would like to fetch the documentation from another repository and another branch, you can run the make command with REPO_URL and BRANCH arguments before starting the development server:
-```
-make REPO_URL="<your_forked_repo_url>" BRANCH="<branch_name>"
-```
 
-## Deploying Changes
+## Copyright headers for code examples
 
-Coming soon: Documenting the deployment process for the documentation website repo.
+In order to not include copyright headers for code examples used in docs, please, add the files under `examples` folder. This way, it will be ignored on automated copyright headers check.

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -30,7 +32,7 @@ func evalReplaceTriggeredByExpr(expr hcl.Expression, keyData instances.Repetitio
 	return ref, diags
 }
 
-// trggersExprToTraversal takes an hcl expression limited to the syntax allowed
+// triggersExprToTraversal takes an hcl expression limited to the syntax allowed
 // in replace_triggered_by, and converts it to a static traversal. The
 // RepetitionData contains the data necessary to evaluate the only allowed
 // variables in the expression, count.index and each.key.

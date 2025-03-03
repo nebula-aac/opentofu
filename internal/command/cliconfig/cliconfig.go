@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 // Package cliconfig has the types representing and the logic to load CLI-level
@@ -94,6 +96,11 @@ func ConfigFile() (string, error) {
 // ConfigDir returns the configuration directory for OpenTofu.
 func ConfigDir() (string, error) {
 	return configDir()
+}
+
+// DataDirs returns the data directories for OpenTofu.
+func DataDirs() ([]string, error) {
+	return dataDirs()
 }
 
 // LoadConfig reads the CLI configuration from the various filesystem locations
@@ -234,7 +241,7 @@ func envConfig(env map[string]string) *Config {
 	config := &Config{}
 
 	if envPluginCacheDir := env[pluginCacheDirEnvVar]; envPluginCacheDir != "" {
-		// No Expandenv here, because expanding environment variables inside
+		// No ExpandEnv here, because expanding environment variables inside
 		// an environment variable would be strange and seems unnecessary.
 		// (User can expand variables into the value while setting it using
 		// standard shell features.)

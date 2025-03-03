@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package funcs
@@ -7,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/function"
 )
@@ -89,7 +93,7 @@ var EndsWithFunc = function.New(&function.Spec{
 })
 
 // ReplaceFunc constructs a function that searches a given string for another
-// given substring, and replaces each occurence with a given replacement string.
+// given substring, and replaces each occurrence with a given replacement string.
 var ReplaceFunc = function.New(&function.Spec{
 	Params: []function.Parameter{
 		{
@@ -154,11 +158,77 @@ var StrContainsFunc = function.New(&function.Spec{
 })
 
 // Replace searches a given string for another given substring,
-// and replaces all occurences with a given replacement string.
+// and replaces all occurrences with a given replacement string.
 func Replace(str, substr, replace cty.Value) (cty.Value, error) {
 	return ReplaceFunc.Call([]cty.Value{str, substr, replace})
 }
 
 func StrContains(str, substr cty.Value) (cty.Value, error) {
 	return StrContainsFunc.Call([]cty.Value{str, substr})
+}
+
+// This constant provides a placeholder value for filename indicating
+// that no file is needed for templatestring.
+const (
+	templateStringFilename = "NoFileNeeded"
+)
+
+// MakeTemplateStringFunc constructs a function that takes a string and
+// an arbitrary object of named values and attempts to render that string
+// as a template using HCL template syntax.
+func MakeTemplateStringFunc(content string, funcsCb func() map[string]function.Function) function.Function {
+
+	params := []function.Parameter{
+		{
+			Name:        "data",
+			Type:        cty.String,
+			AllowMarked: true,
+		},
+		{
+			Name:        "vars",
+			Type:        cty.DynamicPseudoType,
+			AllowMarked: true,
+		},
+	}
+	loadTmpl := func(content string, marks cty.ValueMarks) (hcl.Expression, error) {
+
+		expr, diags := hclsyntax.ParseTemplate([]byte(content), templateStringFilename, hcl.Pos{Line: 1, Column: 1})
+		if diags.HasErrors() {
+			return nil, diags
+		}
+
+		return expr, nil
+	}
+
+	return function.New(&function.Spec{
+		Params: params,
+		Type: func(args []cty.Value) (cty.Type, error) {
+			if !(args[0].IsKnown() && args[1].IsKnown()) {
+				return cty.DynamicPseudoType, nil
+			}
+
+			// We'll render our template now to see what result type it produces.
+			// A template consisting only of a single interpolation can potentially
+			// return any type.
+			dataArg, dataMarks := args[0].Unmark()
+			expr, err := loadTmpl(dataArg.AsString(), dataMarks)
+			if err != nil {
+				return cty.DynamicPseudoType, err
+			}
+
+			// This is safe even if args[1] contains unknowns because the HCL
+			// template renderer itself knows how to short-circuit those.
+			val, err := renderTemplate(expr, args[1], funcsCb())
+			return val.Type(), err
+		},
+		Impl: func(args []cty.Value, retType cty.Type) (cty.Value, error) {
+			dataArg, dataMarks := args[0].Unmark()
+			expr, err := loadTmpl(dataArg.AsString(), dataMarks)
+			if err != nil {
+				return cty.DynamicVal, err
+			}
+			result, err := renderTemplate(expr, args[1], funcsCb())
+			return result.WithMarks(dataMarks), err
+		},
+	})
 }

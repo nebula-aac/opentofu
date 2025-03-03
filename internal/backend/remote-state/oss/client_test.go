@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package oss
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"crypto/md5"
 
 	"github.com/opentofu/opentofu/internal/backend"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/states/remote"
 	"github.com/opentofu/opentofu/internal/states/statefile"
 	"github.com/opentofu/opentofu/internal/states/statemgr"
@@ -32,7 +34,7 @@ func TestRemoteClient(t *testing.T) {
 	bucketName := fmt.Sprintf("tf-remote-oss-test-%x", time.Now().Unix())
 	path := "testState"
 
-	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":  bucketName,
 		"prefix":  path,
 		"encrypt": true,
@@ -41,9 +43,7 @@ func TestRemoteClient(t *testing.T) {
 	createOSSBucket(t, b.ossClient, bucketName)
 	defer deleteOSSBucket(t, b.ossClient, bucketName)
 
-	ctx := context.Background()
-
-	state, err := b.StateMgr(ctx, backend.DefaultStateName)
+	state, err := b.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestRemoteClientLocks(t *testing.T) {
 	tableName := fmt.Sprintf("tfRemoteTestForce%x", time.Now().Unix())
 	path := "testState"
 
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":              bucketName,
 		"prefix":              path,
 		"encrypt":             true,
@@ -65,7 +65,7 @@ func TestRemoteClientLocks(t *testing.T) {
 		"tablestore_endpoint": RemoteTestUsedOTSEndpoint,
 	})).(*Backend)
 
-	b2 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b2 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":              bucketName,
 		"prefix":              path,
 		"encrypt":             true,
@@ -78,14 +78,12 @@ func TestRemoteClientLocks(t *testing.T) {
 	createTablestoreTable(t, b1.otsClient, tableName)
 	defer deleteTablestoreTable(t, b1.otsClient, tableName)
 
-	ctx := context.Background()
-
-	s1, err := b1.StateMgr(ctx, backend.DefaultStateName)
+	s1, err := b1.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	s2, err := b2.StateMgr(ctx, backend.DefaultStateName)
+	s2, err := b2.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +98,7 @@ func TestRemoteClientLocks_multipleStates(t *testing.T) {
 	tableName := fmt.Sprintf("tfRemoteTestForce%x", time.Now().Unix())
 	path := "testState"
 
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":              bucketName,
 		"prefix":              path,
 		"encrypt":             true,
@@ -108,7 +106,7 @@ func TestRemoteClientLocks_multipleStates(t *testing.T) {
 		"tablestore_endpoint": RemoteTestUsedOTSEndpoint,
 	})).(*Backend)
 
-	b2 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b2 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":              bucketName,
 		"prefix":              path,
 		"encrypt":             true,
@@ -121,22 +119,20 @@ func TestRemoteClientLocks_multipleStates(t *testing.T) {
 	createTablestoreTable(t, b1.otsClient, tableName)
 	defer deleteTablestoreTable(t, b1.otsClient, tableName)
 
-	ctx := context.Background()
-
-	s1, err := b1.StateMgr(ctx, "s1")
+	s1, err := b1.StateMgr("s1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s1.Lock(ctx, statemgr.NewLockInfo()); err != nil {
+	if _, err := s1.Lock(statemgr.NewLockInfo()); err != nil {
 		t.Fatal("failed to get lock for s1:", err)
 	}
 
 	// s1 is now locked, s2 should not be locked as it's a different state file
-	s2, err := b2.StateMgr(ctx, "s2")
+	s2, err := b2.StateMgr("s2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s2.Lock(ctx, statemgr.NewLockInfo()); err != nil {
+	if _, err := s2.Lock(statemgr.NewLockInfo()); err != nil {
 		t.Fatal("failed to get lock for s2:", err)
 	}
 }
@@ -148,7 +144,7 @@ func TestRemoteForceUnlock(t *testing.T) {
 	tableName := fmt.Sprintf("tfRemoteTestForce%x", time.Now().Unix())
 	path := "testState"
 
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":              bucketName,
 		"prefix":              path,
 		"encrypt":             true,
@@ -156,7 +152,7 @@ func TestRemoteForceUnlock(t *testing.T) {
 		"tablestore_endpoint": RemoteTestUsedOTSEndpoint,
 	})).(*Backend)
 
-	b2 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b2 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":              bucketName,
 		"prefix":              path,
 		"encrypt":             true,
@@ -169,10 +165,8 @@ func TestRemoteForceUnlock(t *testing.T) {
 	createTablestoreTable(t, b1.otsClient, tableName)
 	defer deleteTablestoreTable(t, b1.otsClient, tableName)
 
-	ctx := context.Background()
-
 	// first test with default
-	s1, err := b1.StateMgr(ctx, backend.DefaultStateName)
+	s1, err := b1.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,24 +175,24 @@ func TestRemoteForceUnlock(t *testing.T) {
 	info.Operation = "test"
 	info.Who = "clientA"
 
-	lockID, err := s1.Lock(ctx, info)
+	lockID, err := s1.Lock(info)
 	if err != nil {
 		t.Fatal("unable to get initial lock:", err)
 	}
 
 	// s1 is now locked, get the same state through s2 and unlock it
-	s2, err := b2.StateMgr(ctx, backend.DefaultStateName)
+	s2, err := b2.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal("failed to get default state to force unlock:", err)
 	}
 
-	if err := s2.Unlock(ctx, lockID); err != nil {
+	if err := s2.Unlock(lockID); err != nil {
 		t.Fatal("failed to force-unlock default state")
 	}
 
 	// now try the same thing with a named state
 	// first test with default
-	s1, err = b1.StateMgr(ctx, "test")
+	s1, err = b1.StateMgr("test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,18 +201,18 @@ func TestRemoteForceUnlock(t *testing.T) {
 	info.Operation = "test"
 	info.Who = "clientA"
 
-	lockID, err = s1.Lock(ctx, info)
+	lockID, err = s1.Lock(info)
 	if err != nil {
 		t.Fatal("unable to get initial lock:", err)
 	}
 
 	// s1 is now locked, get the same state through s2 and unlock it
-	s2, err = b2.StateMgr(ctx, "test")
+	s2, err = b2.StateMgr("test")
 	if err != nil {
 		t.Fatal("failed to get named state to force unlock:", err)
 	}
 
-	if err = s2.Unlock(ctx, lockID); err != nil {
+	if err = s2.Unlock(lockID); err != nil {
 		t.Fatal("failed to force-unlock named state")
 	}
 }
@@ -230,7 +224,7 @@ func TestRemoteClient_clientMD5(t *testing.T) {
 	tableName := fmt.Sprintf("tfRemoteTestForce%x", time.Now().Unix())
 	path := "testState"
 
-	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":              bucketName,
 		"prefix":              path,
 		"tablestore_table":    tableName,
@@ -242,9 +236,7 @@ func TestRemoteClient_clientMD5(t *testing.T) {
 	createTablestoreTable(t, b.otsClient, tableName)
 	defer deleteTablestoreTable(t, b.otsClient, tableName)
 
-	ctx := context.Background()
-
-	s, err := b.StateMgr(ctx, backend.DefaultStateName)
+	s, err := b.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +274,7 @@ func TestRemoteClient_stateChecksum(t *testing.T) {
 	tableName := fmt.Sprintf("tfRemoteTestForce%x", time.Now().Unix())
 	path := "testState"
 
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket":              bucketName,
 		"prefix":              path,
 		"tablestore_table":    tableName,
@@ -294,9 +286,7 @@ func TestRemoteClient_stateChecksum(t *testing.T) {
 	createTablestoreTable(t, b1.otsClient, tableName)
 	defer deleteTablestoreTable(t, b1.otsClient, tableName)
 
-	ctx := context.Background()
-
-	s1, err := b1.StateMgr(ctx, backend.DefaultStateName)
+	s1, err := b1.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,44 +296,44 @@ func TestRemoteClient_stateChecksum(t *testing.T) {
 	s := statemgr.TestFullInitialState()
 	sf := &statefile.File{State: s}
 	var oldState bytes.Buffer
-	if err := statefile.Write(sf, &oldState); err != nil {
+	if err := statefile.Write(sf, &oldState, encryption.StateEncryptionDisabled()); err != nil {
 		t.Fatal(err)
 	}
 	sf.Serial++
 	var newState bytes.Buffer
-	if err := statefile.Write(sf, &newState); err != nil {
+	if err := statefile.Write(sf, &newState, encryption.StateEncryptionDisabled()); err != nil {
 		t.Fatal(err)
 	}
 
 	// Use b2 without a tablestore_table to bypass the lock table to write the state directly.
 	// client2 will write the "incorrect" state, simulating oss eventually consistency delays
-	b2 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b2 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"bucket": bucketName,
 		"prefix": path,
 	})).(*Backend)
-	s2, err := b2.StateMgr(ctx, backend.DefaultStateName)
+	s2, err := b2.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
 	client2 := s2.(*remote.State).Client
 
 	// write the new state through client2 so that there is no checksum yet
-	if err := client2.Put(ctx, newState.Bytes()); err != nil {
+	if err := client2.Put(newState.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 
 	// verify that we can pull a state without a checksum
-	if _, err := client1.Get(ctx); err != nil {
+	if _, err := client1.Get(); err != nil {
 		t.Fatal(err)
 	}
 
 	// write the new state back with its checksum
-	if err := client1.Put(ctx, newState.Bytes()); err != nil {
+	if err := client1.Put(newState.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 
 	// put an empty state in place to check for panics during get
-	if err := client2.Put(ctx, []byte{}); err != nil {
+	if err := client2.Put([]byte{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -359,24 +349,24 @@ func TestRemoteClient_stateChecksum(t *testing.T) {
 
 	// fetching an empty state through client1 should now error out due to a
 	// mismatched checksum.
-	if _, err := client1.Get(ctx); !strings.HasPrefix(err.Error(), errBadChecksumFmt[:80]) {
+	if _, err := client1.Get(); !strings.HasPrefix(err.Error(), errBadChecksumFmt[:80]) {
 		t.Fatalf("expected state checksum error: got %s", err)
 	}
 
 	// put the old state in place of the new, without updating the checksum
-	if err := client2.Put(ctx, oldState.Bytes()); err != nil {
+	if err := client2.Put(oldState.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 
 	// fetching the wrong state through client1 should now error out due to a
 	// mismatched checksum.
-	if _, err := client1.Get(ctx); !strings.HasPrefix(err.Error(), errBadChecksumFmt[:80]) {
+	if _, err := client1.Get(); !strings.HasPrefix(err.Error(), errBadChecksumFmt[:80]) {
 		t.Fatalf("expected state checksum error: got %s", err)
 	}
 
 	// update the state with the correct one after we Get again
 	testChecksumHook = func() {
-		if err := client2.Put(ctx, newState.Bytes()); err != nil {
+		if err := client2.Put(newState.Bytes()); err != nil {
 			t.Fatal(err)
 		}
 		testChecksumHook = nil
@@ -387,7 +377,41 @@ func TestRemoteClient_stateChecksum(t *testing.T) {
 	// this final Get will fail to fail the checksum verification, the above
 	// callback will update the state with the correct version, and Get should
 	// retry automatically.
-	if _, err := client1.Get(ctx); err != nil {
+	if _, err := client1.Get(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Tests the IsLockingEnabled method for the OSS remote client.
+// It checks if locking is enabled based on the otsTable field.
+func TestRemoteClient_IsLockingEnabled(t *testing.T) {
+	tests := []struct {
+		name       string
+		otsTable   string
+		wantResult bool
+	}{
+		{
+			name:       "Locking enabled when otsTable is set",
+			otsTable:   "my-lock-table",
+			wantResult: true,
+		},
+		{
+			name:       "Locking disabled when otsTable is empty",
+			otsTable:   "",
+			wantResult: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &RemoteClient{
+				otsTable: tt.otsTable,
+			}
+
+			gotResult := client.IsLockingEnabled()
+			if gotResult != tt.wantResult {
+				t.Errorf("IsLockingEnabled() = %v; want %v", gotResult, tt.wantResult)
+			}
+		})
 	}
 }

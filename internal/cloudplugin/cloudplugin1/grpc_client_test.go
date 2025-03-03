@@ -1,3 +1,8 @@
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package cloudplugin1
 
 import (
@@ -8,9 +13,9 @@ import (
 	"io"
 	"testing"
 
-	"github.com/golang/mock/gomock"
 	"github.com/opentofu/opentofu/internal/cloudplugin/cloudproto1"
 	"github.com/opentofu/opentofu/internal/cloudplugin/mock_cloudproto1"
+	"go.uber.org/mock/gomock"
 )
 
 var mockError = "this is a mock error"
