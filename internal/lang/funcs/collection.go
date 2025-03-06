@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package funcs
@@ -286,29 +288,29 @@ var LookupFunc = function.New(&function.Spec{
 		}
 
 		// keep track of marks from the collection and key
-		var markses []cty.ValueMarks
+		var marks []cty.ValueMarks
 
 		// unmark collection, retain marks to reapply later
 		mapVar, mapMarks := args[0].Unmark()
-		markses = append(markses, mapMarks)
+		marks = append(marks, mapMarks)
 
 		// include marks on the key in the result
 		keyVal, keyMarks := args[1].Unmark()
 		if len(keyMarks) > 0 {
-			markses = append(markses, keyMarks)
+			marks = append(marks, keyMarks)
 		}
 		lookupKey := keyVal.AsString()
 
 		if !mapVar.IsKnown() {
-			return cty.UnknownVal(retType).WithMarks(markses...), nil
+			return cty.UnknownVal(retType).WithMarks(marks...), nil
 		}
 
 		if mapVar.Type().IsObjectType() {
 			if mapVar.Type().HasAttribute(lookupKey) {
-				return mapVar.GetAttr(lookupKey).WithMarks(markses...), nil
+				return mapVar.GetAttr(lookupKey).WithMarks(marks...), nil
 			}
 		} else if mapVar.HasIndex(cty.StringVal(lookupKey)) == cty.True {
-			return mapVar.Index(cty.StringVal(lookupKey)).WithMarks(markses...), nil
+			return mapVar.Index(cty.StringVal(lookupKey)).WithMarks(marks...), nil
 		}
 
 		if defaultValueSet {
@@ -316,7 +318,7 @@ var LookupFunc = function.New(&function.Spec{
 			if err != nil {
 				return cty.NilVal, err
 			}
-			return defaultVal.WithMarks(markses...), nil
+			return defaultVal.WithMarks(marks...), nil
 		}
 
 		return cty.UnknownVal(cty.DynamicPseudoType), fmt.Errorf(
@@ -511,7 +513,7 @@ var SumFunc = function.New(&function.Spec{
 		ty := args[0].Type()
 
 		if !ty.IsListType() && !ty.IsSetType() && !ty.IsTupleType() {
-			return cty.NilVal, function.NewArgErrorf(0, fmt.Sprintf("argument must be list, set, or tuple. Received %s", ty.FriendlyName()))
+			return cty.NilVal, function.NewArgErrorf(0, "argument must be list, set, or tuple. Received %s", ty.FriendlyName())
 		}
 
 		if !args[0].IsWhollyKnown() {

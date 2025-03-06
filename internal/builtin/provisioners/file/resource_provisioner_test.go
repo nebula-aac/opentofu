@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package file
@@ -117,5 +119,30 @@ func TestResourceProvisioner_connectionRequired(t *testing.T) {
 	got := resp.Diagnostics.Err().Error()
 	if !strings.Contains(got, "Missing connection") {
 		t.Fatalf("expected 'Missing connection' error: got %q", got)
+	}
+}
+
+func TestResourceProvisioner_nullSrcVars(t *testing.T) {
+	conn := cty.ObjectVal(map[string]cty.Value{
+		"type": cty.StringVal(""),
+		"host": cty.StringVal("localhost"),
+	})
+	config := cty.ObjectVal(map[string]cty.Value{
+		"source":      cty.NilVal,
+		"content":     cty.NilVal,
+		"destination": cty.StringVal("/tmp/bar"),
+	})
+	p := New()
+	resp := p.ProvisionResource(provisioners.ProvisionResourceRequest{
+		Connection: conn,
+		Config:     config,
+	})
+	if !resp.Diagnostics.HasErrors() {
+		t.Fatal("expected error")
+	}
+
+	got := resp.Diagnostics.Err().Error()
+	if !strings.Contains(got, "file provisioner error: source and content cannot both be null") {
+		t.Fatalf("file provisioner error: source and content cannot both be null' error: got %q", got)
 	}
 }

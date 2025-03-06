@@ -1,11 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"strings"
 
@@ -24,6 +25,7 @@ func (c *WorkspaceListCommand) Run(args []string) int {
 	envCommandShowWarning(c.Ui, c.LegacyName)
 
 	cmdFlags := c.Meta.defaultFlagSet("workspace list")
+	c.Meta.varFlagSet(cmdFlags)
 	cmdFlags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := cmdFlags.Parse(args); err != nil {
 		c.Ui.Error(fmt.Sprintf("Error parsing command-line flags: %s\n", err.Error()))
@@ -34,6 +36,13 @@ func (c *WorkspaceListCommand) Run(args []string) int {
 	configPath, err := modulePath(args)
 	if err != nil {
 		c.Ui.Error(err.Error())
+		return 1
+	}
+
+	// Load the encryption configuration
+	enc, encDiags := c.EncryptionFromPath(configPath)
+	if encDiags.HasErrors() {
+		c.showDiagnostics(encDiags)
 		return 1
 	}
 
@@ -49,7 +58,7 @@ func (c *WorkspaceListCommand) Run(args []string) int {
 	// Load the backend
 	b, backendDiags := c.Backend(&BackendOpts{
 		Config: backendConfig,
-	})
+	}, enc.State())
 	diags = diags.Append(backendDiags)
 	if backendDiags.HasErrors() {
 		c.showDiagnostics(diags)
@@ -59,9 +68,7 @@ func (c *WorkspaceListCommand) Run(args []string) int {
 	// This command will not write state
 	c.ignoreRemoteVersionConflict(b)
 
-	ctx := context.TODO()
-
-	states, err := b.Workspaces(ctx)
+	states, err := b.Workspaces()
 	if err != nil {
 		c.Ui.Error(err.Error())
 		return 1
@@ -98,10 +105,20 @@ func (c *WorkspaceListCommand) AutocompleteFlags() complete.Flags {
 
 func (c *WorkspaceListCommand) Help() string {
 	helpText := `
-Usage: tofu [global options] workspace list
+Usage: tofu [global options] workspace list [options]
 
   List OpenTofu workspaces.
 
+Options:
+
+  -var 'foo=bar'     Set a value for one of the input variables in the root
+                     module of the configuration. Use this option more than
+                     once to set more than one variable.
+
+  -var-file=filename Load variable values from the given file, in addition
+                     to the default files terraform.tfvars and *.auto.tfvars.
+                     Use this option more than once to include more than one
+                     variables file.
 `
 	return strings.TrimSpace(helpText)
 }

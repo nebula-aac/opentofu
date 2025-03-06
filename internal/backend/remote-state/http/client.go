@@ -1,16 +1,18 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package http
 
 import (
 	"bytes"
-	"context"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 
@@ -33,6 +35,7 @@ type httpClient struct {
 
 	// HTTP
 	Client   *retryablehttp.Client
+	Headers  map[string]string
 	Username string
 	Password string
 
@@ -40,51 +43,60 @@ type httpClient struct {
 	jsonLockInfo []byte
 }
 
-func (c *httpClient) httpRequest(ctx context.Context, method string, url *url.URL, data *[]byte, what string) (*http.Response, error) {
-	// If we have data we need a reader
-	var reader io.Reader = nil
-	if data != nil {
-		reader = bytes.NewReader(*data)
+func (c *httpClient) httpRequest(method string, url *url.URL, data []byte, what string) (*http.Response, error) {
+	var body interface{}
+	if len(data) > 0 {
+		body = data
 	}
 
+	log.Printf("[DEBUG] Executing HTTP remote state request for: %q", what)
+
 	// Create the request
-	req, err := retryablehttp.NewRequestWithContext(ctx, method, url.String(), reader)
+	req, err := retryablehttp.NewRequest(method, url.String(), body)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to make %s HTTP request: %w", what, err)
 	}
-	// Set up basic auth
+
+	// Add user-defined headers
+	for k, v := range c.Headers {
+		req.Header.Set(k, v)
+	}
+
 	if c.Username != "" {
 		req.SetBasicAuth(c.Username, c.Password)
 	}
 
 	// Work with data/body
-	if data != nil {
+	if len(data) > 0 {
 		req.Header.Set("Content-Type", "application/json")
-		req.ContentLength = int64(len(*data))
 
 		// Generate the MD5
-		hash := md5.Sum(*data)
+		hash := md5.Sum(data)
 		b64 := base64.StdEncoding.EncodeToString(hash[:])
 		req.Header.Set("Content-MD5", b64)
 	}
 
 	// Make the request
 	resp, err := c.Client.Do(req)
+
 	if err != nil {
 		return nil, fmt.Errorf("Failed to %s: %w", what, err)
 	}
 
+	log.Printf("[DEBUG] HTTP remote state request for %q returned status code: %d", what, resp.StatusCode)
+	log.Printf("[DEBUG] HTTP response headers: %s", parseHeadersForLog(resp))
+
 	return resp, nil
 }
 
-func (c *httpClient) Lock(ctx context.Context, info *statemgr.LockInfo) (string, error) {
+func (c *httpClient) Lock(info *statemgr.LockInfo) (string, error) {
 	if c.LockURL == nil {
 		return "", nil
 	}
 	c.lockID = ""
 
 	jsonLockInfo := info.Marshal()
-	resp, err := c.httpRequest(ctx, c.LockMethod, c.LockURL, &jsonLockInfo, "lock")
+	resp, err := c.httpRequest(c.LockMethod, c.LockURL, jsonLockInfo, "lock")
 	if err != nil {
 		return "", err
 	}
@@ -96,11 +108,12 @@ func (c *httpClient) Lock(ctx context.Context, info *statemgr.LockInfo) (string,
 		c.jsonLockInfo = jsonLockInfo
 		return info.ID, nil
 	case http.StatusUnauthorized:
+		log.Printf("[DEBUG] LOCK, Unauthorized: %s", parseResponseBodyForLog(resp))
 		return "", fmt.Errorf("HTTP remote state endpoint requires auth")
 	case http.StatusForbidden:
+		log.Printf("[DEBUG] LOCK, Forbidden: %s", parseResponseBodyForLog(resp))
 		return "", fmt.Errorf("HTTP remote state endpoint invalid auth")
 	case http.StatusConflict, http.StatusLocked:
-		defer resp.Body.Close()
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return "", &statemgr.LockError{
@@ -117,20 +130,39 @@ func (c *httpClient) Lock(ctx context.Context, info *statemgr.LockInfo) (string,
 			}
 		}
 		return "", &statemgr.LockError{
-			Info: info,
+			Info: &existing,
 			Err:  fmt.Errorf("HTTP remote state already locked: ID=%s", existing.ID),
 		}
 	default:
+		log.Printf("[DEBUG] LOCK, %d: %s", resp.StatusCode, parseResponseBodyForLog(resp))
 		return "", fmt.Errorf("Unexpected HTTP response code %d", resp.StatusCode)
 	}
 }
 
-func (c *httpClient) Unlock(ctx context.Context, id string) error {
+func (c *httpClient) Unlock(id string) error {
 	if c.UnlockURL == nil {
 		return nil
 	}
 
-	resp, err := c.httpRequest(ctx, c.UnlockMethod, c.UnlockURL, &c.jsonLockInfo, "unlock")
+	var lockInfo statemgr.LockInfo
+
+	// force unlock command does not instantiate statemgr.LockInfo
+	// which means that c.jsonLockInfo will be nil
+	if c.jsonLockInfo != nil {
+		if err := json.Unmarshal(c.jsonLockInfo, &lockInfo); err != nil {
+			return fmt.Errorf("failed to unmarshal jsonLockInfo: %w", err)
+		}
+		if lockInfo.ID != id {
+			return &statemgr.LockError{
+				Info: &lockInfo,
+				Err:  fmt.Errorf("lock id %q does not match existing lock", id),
+			}
+		}
+	}
+
+	lockInfo.ID = id
+
+	resp, err := c.httpRequest(c.UnlockMethod, c.UnlockURL, lockInfo.Marshal(), "unlock")
 	if err != nil {
 		return err
 	}
@@ -140,12 +172,13 @@ func (c *httpClient) Unlock(ctx context.Context, id string) error {
 	case http.StatusOK:
 		return nil
 	default:
+		log.Printf("[DEBUG] UNLOCK, %d: %s", resp.StatusCode, parseResponseBodyForLog(resp))
 		return fmt.Errorf("Unexpected HTTP response code %d", resp.StatusCode)
 	}
 }
 
-func (c *httpClient) Get(ctx context.Context) (*remote.Payload, error) {
-	resp, err := c.httpRequest(ctx, "GET", c.URL, nil, "get state")
+func (c *httpClient) Get() (*remote.Payload, error) {
+	resp, err := c.httpRequest(http.MethodGet, c.URL, nil, "get state")
 	if err != nil {
 		return nil, err
 	}
@@ -160,12 +193,16 @@ func (c *httpClient) Get(ctx context.Context) (*remote.Payload, error) {
 	case http.StatusNotFound:
 		return nil, nil
 	case http.StatusUnauthorized:
+		log.Printf("[DEBUG] GET STATE, Unauthorized: %s", parseResponseBodyForLog(resp))
 		return nil, fmt.Errorf("HTTP remote state endpoint requires auth")
 	case http.StatusForbidden:
+		log.Printf("[DEBUG] GET STATE, Forbidden: %s", parseResponseBodyForLog(resp))
 		return nil, fmt.Errorf("HTTP remote state endpoint invalid auth")
 	case http.StatusInternalServerError:
+		log.Printf("[DEBUG] GET STATE, Internal Server Error: %s", parseResponseBodyForLog(resp))
 		return nil, fmt.Errorf("HTTP remote state internal server error")
 	default:
+		log.Printf("[DEBUG] GET STATE, %d: %s", resp.StatusCode, parseResponseBodyForLog(resp))
 		return nil, fmt.Errorf("Unexpected HTTP response code %d", resp.StatusCode)
 	}
 
@@ -203,7 +240,7 @@ func (c *httpClient) Get(ctx context.Context) (*remote.Payload, error) {
 	return payload, nil
 }
 
-func (c *httpClient) Put(ctx context.Context, data []byte) error {
+func (c *httpClient) Put(data []byte) error {
 	// Copy the target URL
 	base := *c.URL
 
@@ -226,7 +263,7 @@ func (c *httpClient) Put(ctx context.Context, data []byte) error {
 	if c.UpdateMethod != "" {
 		method = c.UpdateMethod
 	}
-	resp, err := c.httpRequest(ctx, method, &base, &data, "upload state")
+	resp, err := c.httpRequest(method, &base, data, "upload state")
 	if err != nil {
 		return err
 	}
@@ -237,13 +274,14 @@ func (c *httpClient) Put(ctx context.Context, data []byte) error {
 	case http.StatusOK, http.StatusCreated, http.StatusNoContent:
 		return nil
 	default:
+		log.Printf("[DEBUG] UPLOAD STATE, %d: %s", resp.StatusCode, parseResponseBodyForLog(resp))
 		return fmt.Errorf("HTTP error: %d", resp.StatusCode)
 	}
 }
 
-func (c *httpClient) Delete(ctx context.Context) error {
+func (c *httpClient) Delete() error {
 	// Make the request
-	resp, err := c.httpRequest(ctx, "DELETE", c.URL, nil, "delete state")
+	resp, err := c.httpRequest(http.MethodDelete, c.URL, nil, "delete state")
 	if err != nil {
 		return err
 	}
@@ -254,6 +292,11 @@ func (c *httpClient) Delete(ctx context.Context) error {
 	case http.StatusOK:
 		return nil
 	default:
+		log.Printf("[DEBUG] DELETE STATE, %d: %s", resp.StatusCode, parseResponseBodyForLog(resp))
 		return fmt.Errorf("HTTP error: %d", resp.StatusCode)
 	}
+}
+
+func (c *httpClient) IsLockingEnabled() bool {
+	return c.UnlockURL != nil
 }

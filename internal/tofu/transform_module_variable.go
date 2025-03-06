@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -9,6 +11,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 
 	"github.com/opentofu/opentofu/internal/addrs"
+	"github.com/opentofu/opentofu/internal/dag"
 	"github.com/opentofu/opentofu/internal/tfdiags"
 
 	"github.com/hashicorp/hcl/v2"
@@ -28,10 +31,6 @@ import (
 // steps for validating module blocks, separate from this transform.
 type ModuleVariableTransformer struct {
 	Config *configs.Config
-
-	// Planning must be set to true when building a planning graph, and must be
-	// false when building an apply graph.
-	Planning bool
 }
 
 func (t *ModuleVariableTransformer) Transform(g *Graph) error {
@@ -104,18 +103,32 @@ func (t *ModuleVariableTransformer) transformSingle(g *Graph, parent, c *configs
 			expr = attr.Expr
 		}
 
-		// Add a plannable node, as the variable may expand
+		// Add a plannable input, as the variable may expand
 		// during module expansion
-		node := &nodeExpandModuleVariable{
+		// It is evaluated in the "parent" module
+		input := &nodeExpandModuleVariable{
 			Addr: addrs.InputVariable{
 				Name: v.Name,
 			},
-			Module:   c.Path,
-			Config:   v,
-			Expr:     expr,
-			Planning: t.Planning,
+			Module: c.Path,
+			Config: v,
+			Expr:   expr,
 		}
-		g.Add(node)
+		g.Add(input)
+
+		// It is evaluated in the "child" module
+		ref := &nodeVariableReference{
+			Addr: addrs.InputVariable{
+				Name: v.Name,
+			},
+			Module: c.Path,
+			Config: v,
+			Expr:   expr,
+		}
+		g.Add(ref)
+
+		// Input must be available before reference is valid
+		g.Connect(dag.BasicEdge(ref, input))
 	}
 
 	return nil

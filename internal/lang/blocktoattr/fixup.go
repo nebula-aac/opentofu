@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package blocktoattr
@@ -143,7 +145,7 @@ func (b *fixupBody) MissingItemRange() hcl.Range {
 
 // effectiveSchema produces a derived *hcl.BodySchema by sniffing the body's
 // content to determine whether the author has used attribute or block syntax
-// for each of the ambigious attributes where both are permitted.
+// for each of the ambiguous attributes where both are permitted.
 //
 // The resulting schema will always contain all of the same names that are
 // in the given schema, but some attribute schemas may instead be replaced by
@@ -243,6 +245,16 @@ func (e *fixupBlocksExpr) Variables() []hcl.Traversal {
 	spec := schema.DecoderSpec()
 	for _, block := range e.blocks {
 		ret = append(ret, hcldec.Variables(block.Body, spec)...)
+	}
+	return ret
+}
+
+func (e *fixupBlocksExpr) Functions() []hcl.Traversal {
+	var ret []hcl.Traversal
+	schema := SchemaForCtyElementType(e.ety)
+	spec := schema.DecoderSpec()
+	for _, block := range e.blocks {
+		ret = append(ret, hcldec.Functions(block.Body, spec)...)
 	}
 	return ret
 }

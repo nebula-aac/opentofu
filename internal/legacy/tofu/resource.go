@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -66,7 +68,7 @@ func NewResource(addr addrs.ResourceInstance) *Resource {
 	return ret
 }
 
-// ResourceKind specifies what kind of instance we're working with, whether
+// ResourceFlag specifies what kind of instance we're working with, whether
 // its a primary instance, a tainted instance, or an orphan.
 type ResourceFlag byte
 

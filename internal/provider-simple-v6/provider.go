@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 // simple provider a minimal provider implementation for testing
@@ -69,8 +71,20 @@ func (s simple) ValidateDataResourceConfig(req providers.ValidateDataResourceCon
 	return resp
 }
 
-func (p simple) UpgradeResourceState(req providers.UpgradeResourceStateRequest) (resp providers.UpgradeResourceStateResponse) {
-	ty := p.schema.ResourceTypes[req.TypeName].Block.ImpliedType()
+func (s simple) MoveResourceState(req providers.MoveResourceStateRequest) providers.MoveResourceStateResponse {
+	var resp providers.MoveResourceStateResponse
+	val, err := ctyjson.Unmarshal(req.SourceStateJSON, s.schema.ResourceTypes["simple_resource"].Block.ImpliedType())
+	resp.Diagnostics = resp.Diagnostics.Append(err)
+	if err != nil {
+		return resp
+	}
+	resp.TargetState = val
+	resp.TargetPrivate = req.SourcePrivate
+	return resp
+}
+func (s simple) UpgradeResourceState(req providers.UpgradeResourceStateRequest) providers.UpgradeResourceStateResponse {
+	var resp providers.UpgradeResourceStateResponse
+	ty := s.schema.ResourceTypes[req.TypeName].Block.ImpliedType()
 	val, err := ctyjson.Unmarshal(req.RawStateJSON, ty)
 	resp.Diagnostics = resp.Diagnostics.Append(err)
 	resp.UpgradedState = val
@@ -143,6 +157,14 @@ func (s simple) ReadDataSource(req providers.ReadDataSourceRequest) (resp provid
 	m["id"] = cty.StringVal("static_id")
 	resp.State = cty.ObjectVal(m)
 	return resp
+}
+
+func (s simple) GetFunctions() providers.GetFunctionsResponse {
+	panic("Not Implemented")
+}
+
+func (s simple) CallFunction(r providers.CallFunctionRequest) providers.CallFunctionResponse {
+	panic("Not Implemented")
 }
 
 func (s simple) Close() error {

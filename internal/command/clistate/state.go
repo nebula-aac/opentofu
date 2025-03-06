@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 // Package state exposes common helpers for working with state from the CLI.
@@ -68,9 +70,9 @@ type Locker interface {
 }
 
 type locker struct {
-	mu      sync.Mutex
 	ctx     context.Context
 	timeout time.Duration
+	mu      sync.Mutex
 	state   statemgr.Locker
 	view    views.StateLocker
 	lockID  string
@@ -148,7 +150,7 @@ func (l *locker) Unlock() tfdiags.Diagnostics {
 	}
 
 	err := slowmessage.Do(LockThreshold, func() error {
-		return l.state.Unlock(l.ctx, l.lockID)
+		return l.state.Unlock(l.lockID)
 	}, l.view.Unlocking)
 
 	if err != nil {

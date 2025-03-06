@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package grpcwrap
@@ -27,6 +29,10 @@ func Provider(p providers.Interface) tfplugin5.ProviderServer {
 type provider struct {
 	provider providers.Interface
 	schema   providers.GetProviderSchemaResponse
+}
+
+func (p *provider) GetMetadata(context.Context, *tfplugin5.GetMetadata_Request) (*tfplugin5.GetMetadata_Response, error) {
+	panic("Not Implemented")
 }
 
 func (p *provider) GetSchema(_ context.Context, req *tfplugin5.GetProviderSchema_Request) (*tfplugin5.GetProviderSchema_Response, error) {
@@ -62,7 +68,7 @@ func (p *provider) GetSchema(_ context.Context, req *tfplugin5.GetProviderSchema
 		}
 	}
 
-	resp.ServerCapabilities = &tfplugin5.GetProviderSchema_ServerCapabilities{
+	resp.ServerCapabilities = &tfplugin5.ServerCapabilities{
 		PlanDestroy: p.schema.ServerCapabilities.PlanDestroy,
 	}
 
@@ -350,6 +356,10 @@ func (p *provider) ImportResourceState(_ context.Context, req *tfplugin5.ImportR
 	return resp, nil
 }
 
+func (p *provider) MoveResourceState(context.Context, *tfplugin5.MoveResourceState_Request) (*tfplugin5.MoveResourceState_Response, error) {
+	panic("Not Implemented")
+}
+
 func (p *provider) ReadDataSource(_ context.Context, req *tfplugin5.ReadDataSource_Request) (*tfplugin5.ReadDataSource_Response, error) {
 	resp := &tfplugin5.ReadDataSource_Response{}
 	ty := p.schema.DataSources[req.TypeName].Block.ImpliedType()
@@ -386,6 +396,26 @@ func (p *provider) ReadDataSource(_ context.Context, req *tfplugin5.ReadDataSour
 	return resp, nil
 }
 
+// CloseEphemeralResource implements tfplugin5.ProviderServer.
+func (p *provider) CloseEphemeralResource(context.Context, *tfplugin5.CloseEphemeralResource_Request) (*tfplugin5.CloseEphemeralResource_Response, error) {
+	panic("unimplemented")
+}
+
+// OpenEphemeralResource implements tfplugin5.ProviderServer.
+func (p *provider) OpenEphemeralResource(context.Context, *tfplugin5.OpenEphemeralResource_Request) (*tfplugin5.OpenEphemeralResource_Response, error) {
+	panic("unimplemented")
+}
+
+// RenewEphemeralResource implements tfplugin5.ProviderServer.
+func (p *provider) RenewEphemeralResource(context.Context, *tfplugin5.RenewEphemeralResource_Request) (*tfplugin5.RenewEphemeralResource_Response, error) {
+	panic("unimplemented")
+}
+
+// ValidateEphemeralResourceConfig implements tfplugin5.ProviderServer.
+func (p *provider) ValidateEphemeralResourceConfig(context.Context, *tfplugin5.ValidateEphemeralResourceConfig_Request) (*tfplugin5.ValidateEphemeralResourceConfig_Response, error) {
+	panic("unimplemented")
+}
+
 func (p *provider) Stop(context.Context, *tfplugin5.Stop_Request) (*tfplugin5.Stop_Response, error) {
 	resp := &tfplugin5.Stop_Response{}
 	err := p.provider.Stop()
@@ -393,6 +423,14 @@ func (p *provider) Stop(context.Context, *tfplugin5.Stop_Request) (*tfplugin5.St
 		resp.Error = err.Error()
 	}
 	return resp, nil
+}
+
+func (p *provider) GetFunctions(context.Context, *tfplugin5.GetFunctions_Request) (*tfplugin5.GetFunctions_Response, error) {
+	panic("Not Implemented")
+}
+
+func (p *provider) CallFunction(context.Context, *tfplugin5.CallFunction_Request) (*tfplugin5.CallFunction_Response, error) {
+	panic("Not Implemented")
 }
 
 // decode a DynamicValue from either the JSON or MsgPack encoding.

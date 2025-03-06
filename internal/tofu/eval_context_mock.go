@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -9,6 +11,7 @@ import (
 	"github.com/opentofu/opentofu/internal/addrs"
 	"github.com/opentofu/opentofu/internal/checks"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/instances"
 	"github.com/opentofu/opentofu/internal/lang"
 	"github.com/opentofu/opentofu/internal/plans"
@@ -149,6 +152,9 @@ type MockEvalContext struct {
 	MoveResultsCalled  bool
 	MoveResultsResults refactoring.MoveResults
 
+	ImportResolverCalled  bool
+	ImportResolverResults *ImportResolver
+
 	InstanceExpanderCalled   bool
 	InstanceExpanderExpander *instances.Expander
 }
@@ -177,14 +183,14 @@ func (c *MockEvalContext) Input() UIInput {
 	return c.InputInput
 }
 
-func (c *MockEvalContext) InitProvider(addr addrs.AbsProviderConfig) (providers.Interface, error) {
+func (c *MockEvalContext) InitProvider(addr addrs.AbsProviderConfig, _ addrs.InstanceKey) (providers.Interface, error) {
 	c.InitProviderCalled = true
 	c.InitProviderType = addr.String()
 	c.InitProviderAddr = addr
 	return c.InitProviderProvider, c.InitProviderError
 }
 
-func (c *MockEvalContext) Provider(addr addrs.AbsProviderConfig) providers.Interface {
+func (c *MockEvalContext) Provider(addr addrs.AbsProviderConfig, _ addrs.InstanceKey) providers.Interface {
 	c.ProviderCalled = true
 	c.ProviderAddr = addr
 	return c.ProviderProvider
@@ -202,8 +208,7 @@ func (c *MockEvalContext) CloseProvider(addr addrs.AbsProviderConfig) error {
 	return nil
 }
 
-func (c *MockEvalContext) ConfigureProvider(addr addrs.AbsProviderConfig, cfg cty.Value) tfdiags.Diagnostics {
-
+func (c *MockEvalContext) ConfigureProvider(addr addrs.AbsProviderConfig, _ addrs.InstanceKey, cfg cty.Value) tfdiags.Diagnostics {
 	c.ConfigureProviderCalled = true
 	c.ConfigureProviderAddr = addr
 	c.ConfigureProviderConfig = cfg
@@ -398,7 +403,16 @@ func (c *MockEvalContext) MoveResults() refactoring.MoveResults {
 	return c.MoveResultsResults
 }
 
+func (c *MockEvalContext) ImportResolver() *ImportResolver {
+	c.ImportResolverCalled = true
+	return c.ImportResolverResults
+}
+
 func (c *MockEvalContext) InstanceExpander() *instances.Expander {
 	c.InstanceExpanderCalled = true
 	return c.InstanceExpanderExpander
+}
+
+func (c *MockEvalContext) GetEncryption() encryption.Encryption {
+	return encryption.Disabled()
 }

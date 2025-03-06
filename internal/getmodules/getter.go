@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package getmodules
@@ -8,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	cleanhttp "github.com/hashicorp/go-cleanhttp"
 	getter "github.com/hashicorp/go-getter"
@@ -15,7 +18,7 @@ import (
 )
 
 // We configure our own go-getter detector and getter sets here, because
-// the set of sources we support is part of Terraform's documentation and
+// the set of sources we support is part of OpenTofu's documentation and
 // so we don't want any new sources introduced in go-getter to sneak in here
 // and work even though they aren't documented. This also insulates us from
 // any meddling that might be done by other go-getter callers linked into our
@@ -32,7 +35,7 @@ import (
 // tradeoffs we're making here.
 
 var goGetterDetectors = []getter.Detector{
-	new(getter.GitHubDetector),
+	&withoutQueryParams{d: new(getter.GitHubDetector)},
 	new(getter.GitDetector),
 
 	// Because historically BitBucket supported both Git and Mercurial
@@ -164,4 +167,26 @@ func (g reusingGetter) getWithGoGetter(ctx context.Context, instPath, packageAdd
 	// copied a previous tree we downloaded, and so either way we should
 	// have got the full module package structure written into instPath.
 	return nil
+}
+
+// withoutQueryParams implements getter.Detector and can be used to wrap another detector.
+// This will look for any query params that might exist in the src and strip that away before calling
+// getter.Detector#Detect. After the response is returned, the query params are attached back to the resulted src.
+type withoutQueryParams struct {
+	d getter.Detector
+}
+
+func (w *withoutQueryParams) Detect(src string, pwd string) (string, bool, error) {
+	var qp string
+	if idx := strings.Index(src, "?"); idx > -1 {
+		qp = src[idx+1:]
+		src = src[:idx]
+	}
+
+	src, ok, err := w.d.Detect(src, pwd)
+	// Attach the query params only when the wrapped detector returns a value back
+	if len(src) > 0 && len(qp) > 0 {
+		src += "?" + qp
+	}
+	return src, ok, err
 }

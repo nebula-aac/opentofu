@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package pg
@@ -7,13 +9,15 @@ package pg
 // TF_ACC=1 GO111MODULE=on go test -v -mod=vendor -timeout=2m -parallel=4 github.com/opentofu/opentofu/backend/remote-state/pg
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/opentofu/opentofu/internal/backend"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/states/remote"
+	"github.com/opentofu/opentofu/internal/states/statemgr"
 )
 
 func TestRemoteClient_impl(t *testing.T) {
@@ -29,21 +33,19 @@ func TestRemoteClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer dbCleaner.Query(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName))
+	defer dropSchema(t, dbCleaner, schemaName)
 
 	config := backend.TestWrapConfig(map[string]interface{}{
 		"conn_str":    connStr,
 		"schema_name": schemaName,
 	})
-	b := backend.TestBackendConfig(t, New(), config).(*Backend)
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), config).(*Backend)
 
 	if b == nil {
 		t.Fatal("Backend could not be configured")
 	}
 
-	ctx := context.Background()
-
-	s, err := b.StateMgr(ctx, backend.DefaultStateName)
+	s, err := b.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,26 +61,112 @@ func TestRemoteLocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer dbCleaner.Query(fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", schemaName))
+	defer dropSchema(t, dbCleaner, schemaName)
 
 	config := backend.TestWrapConfig(map[string]interface{}{
 		"conn_str":    connStr,
 		"schema_name": schemaName,
 	})
 
-	ctx := context.Background()
-
-	b1 := backend.TestBackendConfig(t, New(), config).(*Backend)
-	s1, err := b1.StateMgr(ctx, backend.DefaultStateName)
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), config).(*Backend)
+	s1, err := b1.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	b2 := backend.TestBackendConfig(t, New(), config).(*Backend)
-	s2, err := b2.StateMgr(ctx, backend.DefaultStateName)
+	b2 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), config).(*Backend)
+	s2, err := b2.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	remote.TestRemoteLocks(t, s1.(*remote.State).Client, s2.(*remote.State).Client)
+}
+
+// TestConcurrentCreationLocksInDifferentSchemas tests whether backends with different schemas
+// affect each other while taking global workspace creation locks.
+func TestConcurrentCreationLocksInDifferentSchemas(t *testing.T) {
+	testACC(t)
+	connStr := getDatabaseUrl()
+	dbCleaner, err := sql.Open("postgres", connStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstSchema := fmt.Sprintf("terraform_%s_1", t.Name())
+	secondSchema := fmt.Sprintf("terraform_%s_2", t.Name())
+
+	defer dropSchema(t, dbCleaner, firstSchema)
+	defer dropSchema(t, dbCleaner, secondSchema)
+
+	firstConfig := backend.TestWrapConfig(map[string]interface{}{
+		"conn_str":    connStr,
+		"schema_name": firstSchema,
+	})
+
+	secondConfig := backend.TestWrapConfig(map[string]interface{}{
+		"conn_str":    connStr,
+		"schema_name": secondSchema,
+	})
+
+	//nolint:errcheck // this is a test, I am fine with panic here
+	firstBackend := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), firstConfig).(*Backend)
+
+	//nolint:errcheck // this is a test, I am fine with panic here
+	secondBackend := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), secondConfig).(*Backend)
+
+	//nolint:errcheck // this is a test, I am fine with panic here
+	thirdBackend := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), secondConfig).(*Backend)
+
+	// We operate on remote clients instead of state managers to simulate the
+	// first call to backend.StateMgr(), which creates an empty state in default
+	// workspace.
+	firstClient := &RemoteClient{
+		Client:     firstBackend.db,
+		Name:       backend.DefaultStateName,
+		SchemaName: firstBackend.schemaName,
+	}
+
+	secondClient := &RemoteClient{
+		Client:     secondBackend.db,
+		Name:       backend.DefaultStateName,
+		SchemaName: secondBackend.schemaName,
+	}
+
+	thirdClient := &RemoteClient{
+		Client:     thirdBackend.db,
+		Name:       backend.DefaultStateName,
+		SchemaName: thirdBackend.schemaName,
+	}
+
+	// It doesn't matter what lock info to supply for workspace creation.
+	lock := &statemgr.LockInfo{
+		ID:        "1",
+		Operation: "test",
+		Info:      "This needs to lock for workspace creation",
+		Who:       "me",
+		Version:   "1",
+		Created:   time.Date(1999, 8, 19, 0, 0, 0, 0, time.UTC),
+	}
+
+	// Those calls with empty database must think they are locking
+	// for workspace creation, both of them must succeed since they
+	// are operating on different schemas.
+	if _, err = firstClient.Lock(lock); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = secondClient.Lock(lock); err != nil {
+		t.Fatal(err)
+	}
+
+	// This call must fail since we are trying to acquire the same
+	// lock as the first client. We need to make this call from a
+	// separate session, since advisory locks are okay to be re-acquired
+	// during the same session.
+	if _, err = thirdClient.Lock(lock); err == nil {
+		t.Fatal("Expected an error to be thrown on a second lock attempt")
+	} else if lockErr := err.(*statemgr.LockError); lockErr.Info != lock && //nolint:errcheck,errorlint // this is a test, I am fine with panic here
+		lockErr.Err.Error() != "Already locked for workspace creation: default" {
+		t.Fatalf("Unexpected error thrown on a second lock attempt: %v", err)
+	}
 }

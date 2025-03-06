@@ -9,11 +9,11 @@ description: >-
 
 The `file` provisioner copies files or directories from the machine
 running OpenTofu to the newly created resource. The `file` provisioner
-supports both `ssh` and `winrm` type [connections](/docs/language/resources/provisioners/connection).
+supports both `ssh` and `winrm` type [connections](../../../language/resources/provisioners/connection.mdx).
 
 :::warning Important
 Use provisioners as a last resort. There are better alternatives for most situations. Refer to
-[Declaring Provisioners](/docs/language/resources/provisioners/syntax) for more details.
+[Declaring Provisioners](../../../language/resources/provisioners/syntax.mdx) for more details.
 :::
 
 ## Example usage
@@ -103,7 +103,7 @@ your `destination` argument when using WinRM, because it can serve as a vector
 for arbitrary PowerShell code execution on the remote system.
 
 Modern Windows systems support running an OpenSSH server, so we strongly
-recommend choosing SSH over WinRM whereever possible, and using WinRM only as
+recommend choosing SSH over WinRM wherever possible, and using WinRM only as
 a last resort when working with obsolete Windows versions.
 
 ## Directory Uploads

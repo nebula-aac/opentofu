@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -71,6 +73,14 @@ func (n *nodeExpandModule) References() []*addrs.Reference {
 		forEachRefs, _ := lang.ReferencesInExpr(addrs.ParseRef, n.ModuleCall.ForEach)
 		refs = append(refs, forEachRefs...)
 	}
+
+	for _, passed := range n.ModuleCall.Providers {
+		if passed.InParent.KeyExpression != nil {
+			providerRefs, _ := lang.ReferencesInExpr(addrs.ParseRef, passed.InParent.KeyExpression)
+			refs = append(refs, providerRefs...)
+		}
+	}
+
 	return refs
 }
 
@@ -113,7 +123,7 @@ func (n *nodeExpandModule) Execute(ctx EvalContext, op walkOperation) (diags tfd
 		ctx = ctx.WithPath(module)
 		switch {
 		case n.ModuleCall.Count != nil:
-			count, ctDiags := evaluateCountExpression(n.ModuleCall.Count, ctx)
+			count, ctDiags := evaluateCountExpression(n.ModuleCall.Count, ctx, module)
 			diags = diags.Append(ctDiags)
 			if diags.HasErrors() {
 				return diags
@@ -121,7 +131,7 @@ func (n *nodeExpandModule) Execute(ctx EvalContext, op walkOperation) (diags tfd
 			expander.SetModuleCount(module, call, count)
 
 		case n.ModuleCall.ForEach != nil:
-			forEach, feDiags := evaluateForEachExpression(n.ModuleCall.ForEach, ctx)
+			forEach, feDiags := evaluateForEachExpression(n.ModuleCall.ForEach, ctx, module)
 			diags = diags.Append(feDiags)
 			if diags.HasErrors() {
 				return diags
@@ -147,7 +157,8 @@ func (n *nodeExpandModule) Execute(ctx EvalContext, op walkOperation) (diags tfd
 // The root module instance also closes any remaining provisioner plugins which
 // do not have a lifecycle controlled by individual graph nodes.
 type nodeCloseModule struct {
-	Addr addrs.Module
+	Addr       addrs.Module
+	RootConfig *configs.Config
 }
 
 var (
@@ -178,6 +189,19 @@ func (n *nodeCloseModule) Name() string {
 	return n.Addr.String() + " (close)"
 }
 
+func (n *nodeCloseModule) IsOverridden(addr addrs.Module) bool {
+	if n.RootConfig == nil {
+		return false
+	}
+
+	modConfig := n.RootConfig.Descendent(addr)
+	if modConfig == nil {
+		return false
+	}
+
+	return modConfig.Module.IsOverridden
+}
+
 func (n *nodeCloseModule) Execute(ctx EvalContext, op walkOperation) (diags tfdiags.Diagnostics) {
 	if !n.Addr.IsRoot() {
 		return
@@ -200,8 +224,9 @@ func (n *nodeCloseModule) Execute(ctx EvalContext, op walkOperation) (diags tfdi
 				}
 			}
 
-			// empty child modules are always removed
-			if len(mod.Resources) == 0 && !mod.Addr.IsRoot() {
+			// empty non-root modules are removed normally,
+			// but if the module is being overridden, it should be kept
+			if len(mod.Resources) == 0 && !mod.Addr.IsRoot() && !n.IsOverridden(mod.Addr.Module()) {
 				delete(state.Modules, modKey)
 			}
 		}
@@ -241,7 +266,9 @@ func (n *nodeValidateModule) Execute(ctx EvalContext, op walkOperation) (diags t
 			diags = diags.Append(countDiags)
 
 		case n.ModuleCall.ForEach != nil:
-			_, forEachDiags := evaluateForEachExpressionValue(n.ModuleCall.ForEach, ctx, true)
+			const unknownsAllowed = true
+			const tupleNotAllowed = false
+			_, forEachDiags := evaluateForEachExpressionValue(n.ModuleCall.ForEach, ctx, unknownsAllowed, tupleNotAllowed, module)
 			diags = diags.Append(forEachDiags)
 		}
 

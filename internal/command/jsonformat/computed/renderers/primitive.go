@@ -1,11 +1,13 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package renderers
 
 import (
+	"encoding/json"
 	"fmt"
-	"math/big"
 	"strings"
 
 	"github.com/zclconf/go-cty/cty"
@@ -67,8 +69,8 @@ func renderPrimitiveValue(value interface{}, t cty.Type, opts computed.RenderHum
 		}
 		return "false"
 	case t == cty.Number:
-		bf := big.NewFloat(value.(float64))
-		return bf.Text('f', -1)
+		num := value.(json.Number)
+		return num.String()
 	default:
 		panic("unrecognized primitive type: " + t.FriendlyName())
 	}

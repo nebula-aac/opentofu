@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -41,11 +43,14 @@ func (b *BasicGraphBuilder) Build(path addrs.ModuleInstance) (*Graph, tfdiags.Di
 		log.Printf("[TRACE] Executing graph transform %T", step)
 
 		err := step.Transform(g)
-		if thisStepStr := g.StringWithNodeTypes(); thisStepStr != lastStepStr {
-			log.Printf("[TRACE] Completed graph transform %T with new graph:\n%s  ------", step, logging.Indent(thisStepStr))
-			lastStepStr = thisStepStr
-		} else {
-			log.Printf("[TRACE] Completed graph transform %T (no changes)", step)
+
+		if logging.IsDebugOrHigher() {
+			if thisStepStr := g.StringWithNodeTypes(); thisStepStr != lastStepStr {
+				log.Printf("[TRACE] Completed graph transform %T with new graph:\n%s  ------", step, logging.Indent(thisStepStr))
+				lastStepStr = thisStepStr
+			} else {
+				log.Printf("[TRACE] Completed graph transform %T (no changes)", step)
+			}
 		}
 
 		if err != nil {

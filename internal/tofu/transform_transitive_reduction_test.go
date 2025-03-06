@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -53,7 +55,7 @@ func TestTransitiveReductionTransformer(t *testing.T) {
 						},
 					},
 				},
-			}),
+			}, t),
 		}
 		if err := transform.Transform(&g); err != nil {
 			t.Fatalf("err: %s", err)

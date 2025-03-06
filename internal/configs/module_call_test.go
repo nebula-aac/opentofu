@@ -1,10 +1,13 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package configs
 
 import (
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/go-test/deep"
@@ -34,11 +37,6 @@ func TestLoadModuleCall(t *testing.T) {
 			SourceAddr:    addrs.ModuleSourceLocal("./foo"),
 			SourceAddrRaw: "./foo",
 			SourceSet:     true,
-			SourceAddrRange: hcl.Range{
-				Filename: "module-calls.tf",
-				Start:    hcl.Pos{Line: 3, Column: 12, Byte: 27},
-				End:      hcl.Pos{Line: 3, Column: 19, Byte: 34},
-			},
 			DeclRange: hcl.Range{
 				Filename: "module-calls.tf",
 				Start:    hcl.Pos{Line: 2, Column: 1, Byte: 1},
@@ -57,11 +55,6 @@ func TestLoadModuleCall(t *testing.T) {
 			},
 			SourceAddrRaw: "hashicorp/bar/aws",
 			SourceSet:     true,
-			SourceAddrRange: hcl.Range{
-				Filename: "module-calls.tf",
-				Start:    hcl.Pos{Line: 8, Column: 12, Byte: 113},
-				End:      hcl.Pos{Line: 8, Column: 31, Byte: 132},
-			},
 			DeclRange: hcl.Range{
 				Filename: "module-calls.tf",
 				Start:    hcl.Pos{Line: 7, Column: 1, Byte: 87},
@@ -75,11 +68,6 @@ func TestLoadModuleCall(t *testing.T) {
 			},
 			SourceAddrRaw: "git::https://example.com/",
 			SourceSet:     true,
-			SourceAddrRange: hcl.Range{
-				Filename: "module-calls.tf",
-				Start:    hcl.Pos{Line: 15, Column: 12, Byte: 193},
-				End:      hcl.Pos{Line: 15, Column: 39, Byte: 220},
-			},
 			DependsOn: []hcl.Traversal{
 				{
 					hcl.TraverseRoot{
@@ -138,6 +126,15 @@ func TestLoadModuleCall(t *testing.T) {
 	// here anyway... the point of this test is to ensure we handle everything
 	// else properly.
 	for _, m := range gotModules {
+		// This is a structural issue which existed before static evaluation, but has been made worse by it
+		// See https://github.com/opentofu/opentofu/issues/1467 for more details
+		eval := NewStaticEvaluator(nil, RootModuleCallForTesting())
+		diags := m.decodeStaticFields(eval)
+		if diags.HasErrors() {
+			t.Fatal(diags.Error())
+		}
+		m.Source = nil
+
 		m.Config = nil
 		m.Count = nil
 		m.ForEach = nil
@@ -149,6 +146,11 @@ func TestLoadModuleCall(t *testing.T) {
 }
 
 func TestModuleSourceAddrEntersNewPackage(t *testing.T) {
+	absolutePath := "/absolute/path"
+	if runtime.GOOS == "windows" {
+		absolutePath = "C:\\absolute\\path"
+	}
+
 	tests := []struct {
 		Addr string
 		Want bool
@@ -162,7 +164,7 @@ func TestModuleSourceAddrEntersNewPackage(t *testing.T) {
 			false,
 		},
 		{
-			"/absolute/path",
+			absolutePath,
 			true,
 		},
 		{

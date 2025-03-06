@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package configload
@@ -19,7 +21,7 @@ import (
 // In the case of any errors, t.Fatal (or similar) will be called to halt
 // execution of the test, so the calling test does not need to handle errors
 // itself.
-func NewLoaderForTests(t *testing.T) (*Loader, func()) {
+func NewLoaderForTests(t testing.TB) (*Loader, func()) {
 	t.Helper()
 
 	modulesDir, err := os.MkdirTemp("", "tf-configs")

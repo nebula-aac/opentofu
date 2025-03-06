@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package dag
@@ -9,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opentofu/opentofu/internal/logging"
 	"github.com/opentofu/opentofu/internal/tfdiags"
 )
 
@@ -47,15 +50,15 @@ type Walker struct {
 	// changeLock must be held to modify any of the fields below. Only Update
 	// should modify these fields. Modifying them outside of Update can cause
 	// serious problems.
-	changeLock sync.Mutex
-	vertices   Set
-	edges      Set
-	vertexMap  map[Vertex]*walkerVertex
+	changeLock      sync.Mutex
+	vertices, edges Set
+	vertexMap       map[Vertex]*walkerVertex
 
 	// wait is done when all vertices have executed. It may become "undone"
 	// if new vertices are added.
 	wait sync.WaitGroup
 
+	diagsLock sync.Mutex
 	// diagsMap contains the diagnostics recorded so far for execution,
 	// and upstreamFailed contains all the vertices whose problems were
 	// caused by upstream failures, and thus whose diagnostics should be
@@ -64,7 +67,6 @@ type Walker struct {
 	// Readers and writers of either map must hold diagsLock.
 	diagsMap       map[Vertex]tfdiags.Diagnostics
 	upstreamFailed map[Vertex]struct{}
-	diagsLock      sync.Mutex
 }
 
 func (w *Walker) init() {
@@ -90,6 +92,7 @@ type walkerVertex struct {
 	DoneCh   chan struct{}
 	CancelCh chan struct{}
 
+	DepsLock sync.Mutex
 	// Dependency information. Any changes to any of these fields requires
 	// holding DepsLock.
 	//
@@ -100,7 +103,6 @@ type walkerVertex struct {
 	// DepsUpdateCh is closed when there is a new DepsCh set.
 	DepsCh       chan bool
 	DepsUpdateCh chan struct{}
-	DepsLock     sync.Mutex
 
 	// Below is not safe to read/write in parallel. This behavior is
 	// enforced by changes only happening in Update. Nothing else should
@@ -407,6 +409,19 @@ func (w *Walker) walkVertex(v Vertex, info *walkerVertex) {
 	w.diagsLock.Unlock()
 }
 
+const debugWaitDepsInterval = 5 * time.Second
+
+func debugTimer(dur time.Duration) <-chan time.Time {
+	// This is expensive to do at scale, so we only do it when debugging.
+	if logging.IsDebugOrHigher() {
+		return time.After(dur)
+	}
+
+	// Receiving on a nil channel just blocks, which is fine because
+	// waitDeps also selects on depCh and cancelCh.
+	return nil
+}
+
 func (w *Walker) waitDeps(
 	v Vertex,
 	deps map[Vertex]<-chan struct{},
@@ -428,7 +443,7 @@ func (w *Walker) waitDeps(
 				doneCh <- false
 				return
 
-			case <-time.After(time.Second * 5):
+			case <-debugTimer(debugWaitDepsInterval):
 				log.Printf("[TRACE] dag/walk: vertex %q is waiting for %q",
 					VertexName(v), VertexName(dep))
 			}

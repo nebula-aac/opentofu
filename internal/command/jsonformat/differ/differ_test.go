@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package differ
@@ -1574,7 +1576,6 @@ func TestValue_Outputs(t *testing.T) {
 	}
 
 	for name, tc := range tcs {
-
 		// Let's set some default values on the input.
 		if tc.input.RelevantAttributes == nil {
 			tc.input.RelevantAttributes = attribute_path.AlwaysMatcher()
@@ -1746,16 +1747,16 @@ func TestValue_PrimitiveAttributes(t *testing.T) {
 		"dynamic_type_change": {
 			input: structured.Change{
 				Before: "old",
-				After:  4.0,
+				After:  json.Number("4"),
 			},
 			attribute: cty.DynamicPseudoType,
 			validateDiff: renderers.ValidateTypeChange(
 				renderers.ValidatePrimitive("old", nil, plans.Delete, false),
-				renderers.ValidatePrimitive(nil, 4.0, plans.Create, false),
+				renderers.ValidatePrimitive(nil, json.Number("4"), plans.Create, false),
 				plans.Update, false),
 			validateSliceDiffs: []renderers.ValidateDiffFunction{
 				renderers.ValidatePrimitive("old", nil, plans.Delete, false),
-				renderers.ValidatePrimitive(nil, 4.0, plans.Create, false),
+				renderers.ValidatePrimitive(nil, json.Number("4"), plans.Create, false),
 			},
 		},
 	}
@@ -2168,12 +2169,12 @@ func TestValue_CollectionAttributes(t *testing.T) {
 			input: structured.Change{
 				Before: []interface{}{
 					"one",
-					2.0,
+					json.Number("2"),
 					"three",
 				},
 				After: []interface{}{
 					"one",
-					4.0,
+					json.Number("4"),
 					"three",
 				},
 			},
@@ -2182,14 +2183,13 @@ func TestValue_CollectionAttributes(t *testing.T) {
 			},
 			validateDiff: renderers.ValidateList([]renderers.ValidateDiffFunction{
 				renderers.ValidatePrimitive("one", "one", plans.NoOp, false),
-				renderers.ValidatePrimitive(2.0, 4.0, plans.Update, false),
+				renderers.ValidatePrimitive(json.Number("2"), json.Number("4"), plans.Update, false),
 				renderers.ValidatePrimitive("three", "three", plans.NoOp, false),
 			}, plans.Update, false),
 		},
 	}
 
 	for name, tc := range tcs {
-
 		// Let's set some default values on the input.
 		if tc.input.RelevantAttributes == nil {
 			tc.input.RelevantAttributes = attribute_path.AlwaysMatcher()
@@ -2340,27 +2340,27 @@ func TestRelevantAttributes(t *testing.T) {
 			input: structured.Change{
 				Before: map[string]interface{}{
 					"list": []interface{}{
-						0, 1, 2, 3, 4,
+						json.Number("0"), json.Number("1"), json.Number("2"), json.Number("3"), json.Number("4"),
 					},
 				},
 				After: map[string]interface{}{
 					"list": []interface{}{
-						0, 5, 6, 7, 4,
+						json.Number("0"), json.Number("5"), json.Number("6"), json.Number("7"), json.Number("4"),
 					},
 				},
 				RelevantAttributes: &attribute_path.PathMatcher{
 					Paths: [][]interface{}{ // The list is actually just going to ignore this.
 						{
 							"list",
-							float64(0),
+							0.0,
 						},
 						{
 							"list",
-							float64(2),
+							2.0,
 						},
 						{
 							"list",
-							float64(4),
+							4.0,
 						},
 					},
 				},
@@ -2376,14 +2376,14 @@ func TestRelevantAttributes(t *testing.T) {
 				// The list validator below just ignores our relevant
 				// attributes. This is deliberate.
 				"list": renderers.ValidateList([]renderers.ValidateDiffFunction{
-					renderers.ValidatePrimitive(0, 0, plans.NoOp, false),
-					renderers.ValidatePrimitive(1, nil, plans.Delete, false),
-					renderers.ValidatePrimitive(2, nil, plans.Delete, false),
-					renderers.ValidatePrimitive(3, nil, plans.Delete, false),
-					renderers.ValidatePrimitive(nil, 5, plans.Create, false),
-					renderers.ValidatePrimitive(nil, 6, plans.Create, false),
-					renderers.ValidatePrimitive(nil, 7, plans.Create, false),
-					renderers.ValidatePrimitive(4, 4, plans.NoOp, false),
+					renderers.ValidatePrimitive(json.Number("0"), json.Number("0"), plans.NoOp, false),
+					renderers.ValidatePrimitive(json.Number("1"), nil, plans.Delete, false),
+					renderers.ValidatePrimitive(json.Number("2"), nil, plans.Delete, false),
+					renderers.ValidatePrimitive(json.Number("3"), nil, plans.Delete, false),
+					renderers.ValidatePrimitive(nil, json.Number("5"), plans.Create, false),
+					renderers.ValidatePrimitive(nil, json.Number("6"), plans.Create, false),
+					renderers.ValidatePrimitive(nil, json.Number("7"), plans.Create, false),
+					renderers.ValidatePrimitive(json.Number("4"), json.Number("4"), plans.NoOp, false),
 				}, plans.Update, false),
 			}, nil, nil, nil, nil, plans.Update, false),
 		},
@@ -2440,12 +2440,12 @@ func TestRelevantAttributes(t *testing.T) {
 			input: structured.Change{
 				Before: map[string]interface{}{
 					"set": []interface{}{
-						0, 1, 2, 3, 4,
+						json.Number("0"), json.Number("1"), json.Number("2"), json.Number("3"), json.Number("4"),
 					},
 				},
 				After: map[string]interface{}{
 					"set": []interface{}{
-						0, 2, 4, 5, 6,
+						json.Number("0"), json.Number("2"), json.Number("4"), json.Number("5"), json.Number("6"),
 					},
 				},
 				RelevantAttributes: &attribute_path.PathMatcher{
@@ -2466,13 +2466,13 @@ func TestRelevantAttributes(t *testing.T) {
 			},
 			validate: renderers.ValidateBlock(map[string]renderers.ValidateDiffFunction{
 				"set": renderers.ValidateSet([]renderers.ValidateDiffFunction{
-					renderers.ValidatePrimitive(0, 0, plans.NoOp, false),
-					renderers.ValidatePrimitive(1, nil, plans.Delete, false),
-					renderers.ValidatePrimitive(2, 2, plans.NoOp, false),
-					renderers.ValidatePrimitive(3, nil, plans.Delete, false),
-					renderers.ValidatePrimitive(4, 4, plans.NoOp, false),
-					renderers.ValidatePrimitive(nil, 5, plans.Create, false),
-					renderers.ValidatePrimitive(nil, 6, plans.Create, false),
+					renderers.ValidatePrimitive(json.Number("0"), json.Number("0"), plans.NoOp, false),
+					renderers.ValidatePrimitive(json.Number("1"), nil, plans.Delete, false),
+					renderers.ValidatePrimitive(json.Number("2"), json.Number("2"), plans.NoOp, false),
+					renderers.ValidatePrimitive(json.Number("3"), nil, plans.Delete, false),
+					renderers.ValidatePrimitive(json.Number("4"), json.Number("4"), plans.NoOp, false),
+					renderers.ValidatePrimitive(nil, json.Number("5"), plans.Create, false),
+					renderers.ValidatePrimitive(nil, json.Number("6"), plans.Create, false),
 				}, plans.Update, false),
 			}, nil, nil, nil, nil, plans.Update, false),
 		},
@@ -2759,14 +2759,14 @@ func TestSpecificCases(t *testing.T) {
 				Before: map[string]interface{}{
 					"list": []interface{}{
 						map[string]interface{}{
-							"number": -1,
+							"number": json.Number("-1"),
 						},
 					},
 				},
 				After: map[string]interface{}{
 					"list": []interface{}{
 						map[string]interface{}{
-							"number": 2,
+							"number": json.Number("2"),
 						},
 					},
 				},
@@ -2797,7 +2797,7 @@ func TestSpecificCases(t *testing.T) {
 			validate: renderers.ValidateBlock(map[string]renderers.ValidateDiffFunction{
 				"list": renderers.ValidateList([]renderers.ValidateDiffFunction{
 					renderers.ValidateObject(map[string]renderers.ValidateDiffFunction{
-						"number": renderers.ValidatePrimitive(-1, 2, plans.Update, false),
+						"number": renderers.ValidatePrimitive(json.Number("-1"), json.Number("2"), plans.Update, false),
 					}, plans.Update, false),
 				}, plans.Update, false),
 			}, nil, nil, nil, nil, plans.Update, false),
@@ -2808,14 +2808,14 @@ func TestSpecificCases(t *testing.T) {
 				Before: map[string]interface{}{
 					"list": []interface{}{
 						map[string]interface{}{
-							"number": -1,
+							"number": json.Number("-1"),
 						},
 					},
 				},
 				After: map[string]interface{}{
 					"list": []interface{}{
 						map[string]interface{}{
-							"number": 2,
+							"number": json.Number("2"),
 						},
 					},
 				},
@@ -2846,10 +2846,94 @@ func TestSpecificCases(t *testing.T) {
 			validate: renderers.ValidateBlock(map[string]renderers.ValidateDiffFunction{
 				"list": renderers.ValidateList([]renderers.ValidateDiffFunction{
 					renderers.ValidateObject(map[string]renderers.ValidateDiffFunction{
-						"number": renderers.ValidatePrimitive(-1, 2, plans.Update, false),
+						"number": renderers.ValidatePrimitive(json.Number("-1"), json.Number("2"), plans.Update, false),
 					}, plans.Update, false),
 				}, plans.Update, false),
 			}, nil, nil, nil, nil, plans.Update, false),
+		},
+		// Following tests are from issue 1805. https://github.com/opentofu/opentofu/issues/1805.
+		// The issue is about handling unknown dynamic nested blocks. In these cases unknown nested blocks are
+		// not shown at all but they should be listed as unknown in the diff.
+		"issues/1805/create_with_unknown_dynamic_nested_block": {
+			input: structured.Change{
+				Before: nil,
+				After: map[string]interface{}{
+					"attribute_one": "test",
+				},
+				Unknown: map[string]interface{}{
+					"nested_unknown_block": true,
+				},
+				ReplacePaths:       &attribute_path.PathMatcher{},
+				RelevantAttributes: attribute_path.AlwaysMatcher(),
+			},
+			block: &jsonprovider.Block{
+				Attributes: map[string]*jsonprovider.Attribute{
+					"attribute_one": {
+						AttributeType: unmarshalType(t, cty.String),
+					},
+				},
+				BlockTypes: map[string]*jsonprovider.BlockType{
+					"nested_unknown_block": {
+						Block: &jsonprovider.Block{
+							Attributes: map[string]*jsonprovider.Attribute{
+								"attribute_two": {
+									AttributeType: unmarshalType(t, cty.String),
+								},
+							},
+						},
+						NestingMode: "single",
+					},
+				},
+			},
+			validate: renderers.ValidateBlock(map[string]renderers.ValidateDiffFunction{
+				"attribute_one": renderers.ValidatePrimitive(nil, "test", plans.Create, false),
+			}, map[string]renderers.ValidateDiffFunction{
+				"nested_unknown_block": renderers.ValidateUnknown(nil, plans.Create, false),
+			}, nil, nil, nil, plans.Create, false),
+		},
+		"issues/1805/update_with_unknown_dynamic_nested_block": {
+			input: structured.Change{
+				Before: map[string]interface{}{
+					"attribute_one": "before_value_attr_1",
+					"attribute_two": "before_value_attr_2",
+				},
+				After: map[string]interface{}{
+					"attribute_one": "after_value_attr_1",
+				},
+				Unknown: map[string]interface{}{
+					"nested_unknown_block": true,
+				},
+				ReplacePaths:       &attribute_path.PathMatcher{},
+				RelevantAttributes: attribute_path.AlwaysMatcher(),
+			},
+			block: &jsonprovider.Block{
+				Attributes: map[string]*jsonprovider.Attribute{
+					"attribute_one": {
+						AttributeType: unmarshalType(t, cty.String),
+					},
+					"attribute_two": {
+						AttributeType: unmarshalType(t, cty.String),
+					},
+				},
+				BlockTypes: map[string]*jsonprovider.BlockType{
+					"nested_unknown_block": {
+						Block: &jsonprovider.Block{
+							Attributes: map[string]*jsonprovider.Attribute{
+								"attribute_two": {
+									AttributeType: unmarshalType(t, cty.String),
+								},
+							},
+						},
+						NestingMode: "single",
+					},
+				},
+			},
+			validate: renderers.ValidateBlock(map[string]renderers.ValidateDiffFunction{
+				"attribute_one": renderers.ValidatePrimitive("before_value_attr_1", "after_value_attr_1", plans.Update, false),
+				"attribute_two": renderers.ValidatePrimitive("before_value_attr_2", nil, plans.Delete, false),
+			}, map[string]renderers.ValidateDiffFunction{
+				"nested_unknown_block": renderers.ValidateUnknown(nil, plans.Create, false),
+			}, nil, nil, nil, plans.Update, false),
 		},
 	}
 	for name, tc := range tcs {
@@ -2878,7 +2962,6 @@ func wrapChangeInSlice(input structured.Change) structured.Change {
 		case nil:
 			if set, ok := unknown.(bool); (set && ok) || explicit {
 				return []interface{}{nil}
-
 			}
 			return []interface{}{}
 		default:
@@ -2909,7 +2992,6 @@ func wrapChangeInMap(input structured.Change) structured.Change {
 }
 
 func wrapChange(input structured.Change, step interface{}, wrap func(interface{}, interface{}, bool) interface{}) structured.Change {
-
 	replacePaths := &attribute_path.PathMatcher{}
 	for _, path := range input.ReplacePaths.(*attribute_path.PathMatcher).Paths {
 		var updated []interface{}
@@ -2923,7 +3005,6 @@ func wrapChange(input structured.Change, step interface{}, wrap func(interface{}
 	// those as well.
 	relevantAttributes := input.RelevantAttributes
 	if concrete, ok := relevantAttributes.(*attribute_path.PathMatcher); ok {
-
 		newRelevantAttributes := &attribute_path.PathMatcher{}
 		for _, path := range concrete.Paths {
 			var updated []interface{}

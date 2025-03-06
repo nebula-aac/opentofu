@@ -1,73 +1,56 @@
-## 1.6.0 (Unreleased)
-
-IMPORTANT NOTES:
-
-- Conditional GPG Validation Bypass for Default Registry - ([#309](https://github.com/opentofu/opentofu/pull/309)): A temporary change has been introduced to skip GPG validation under specific conditions. This behavior is tracked under issue #309 and applies as follows:
-  - **Registry Scope**: This change only affects provider packages from the default registry.
-  - **Key Availability**: GPG validation will be skipped when and only when the provider's GPG keys are not available in the default registry.
-  - **Temporary Measure**: This is a stopgap measure until GPG keys for all providers can be populated in the default registry.
-
-  While this offers operational flexibility, it does reduce the level of security assurance for affected packages. Users who prioritize security should set the `OPENTOFU_ENFORCE_GPG_VALIDATION` environment variable to `true` to enforce GPG validation of all providers.
-
-  **Future Removal**: We intend to remove this feature once all GPG keys are populated in the default registry, reverting to a strict GPG validation process for all providers.
+## 1.10.0 (Unreleased)
 
 UPGRADE NOTES:
 
-* The `cloud` and `remote` backends will no longer default to `app.terraform.io` hostname and will require the hostname to be explicitly specified ([#291](https://github.com/opentofu/opentofu/pull/291));
-* The `login` and `logout` commands will no longer default to `app.terraform.io` hostname and will require the hostname to be explicitly provided as a command-line argument ([#291](https://github.com/opentofu/opentofu/pull/291));
-* prevent future possible incompatibility with states that include unknown `check` block result kinds.  ([#355](https://github.com/opentofu/opentofu/pull/355));
+* On Linux, OpenTofu now requires kernel version 3.2 or later.
+* On macOS, OpenTofu now requires macOS 11 Big Sur or later. We expect that the next minor release will require macOS 12 Monterey or later.
+* Using the `ghcr.io/opentofu/opentofu` image as a base image for custom images is no longer supported. Refer to https://opentofu.org/docs/intro/install/docker/ for instructions on building your own image.
+* OpenTofu 1.10 with `pg` backend must not be used in parallel with older versions. It may lead to unsafe state writes, when the database is shared across multiple projects.
+* On Windows, OpenTofu now has a more conservative definition of "symlink" which is limited only true [symbolic links](https://learn.microsoft.com/en-us/windows/win32/fileio/symbolic-links), and does not include other [reparse point](https://learn.microsoft.com/en-us/windows/win32/fileio/reparse-points) types such as [junctions](https://learn.microsoft.com/en-us/windows/win32/fileio/hard-links-and-junctions#junctions).
+
+    This change fixes a number of edge-cases that caused OpenTofu to interpret paths incorrectly in earlier versions, but may cause new failures if the path you use for the `TEMP` environment variable traverses through directory junctions. Replacing any directory junctions with directory symlinks (e.g. using [`mklink`](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/mklink) with the `/d` parameter instead of the `/j` parameter) should ensure correct treatment.
 
 NEW FEATURES:
 
-* `tofu test`: The previously experimental `tofu test` command has been moved out of experimental. This comes with a significant change in how OpenTofu tests are written and executed.
-
-  OpenTofu tests are written within `.tftest.hcl` files, controlled by a series of `run` blocks. Each `run` block will execute an OpenTofu plan or apply command against the OpenTofu configuration under test and can execute conditions against the resultant plan and state.
+- New builtin provider functions added ([#2306](https://github.com/opentofu/opentofu/pull/2306)) :
+    - `provider::terraform::decode_tfvars` - Decode a TFVars file content into an object.
+    - `provider::terraform::encode_tfvars` - Encode an object into a string with the same format as a TFVars file.
+    - `provider::terraform::encode_expr` - Encode an arbitrary expression into a string with valid OpenTofu syntax.
+- Added support for S3 native locking ([#599](https://github.com/opentofu/opentofu/issues/599))
 
 ENHANCEMENTS:
+* OpenTofu will now recommend using `-exclude` instead of `-target`, when possible, in the error messages about unknown values in `count` and `for_each` arguments, thereby providing a more definitive workaround. ([#2154](https://github.com/opentofu/opentofu/pull/2154))
+* State encryption now supports using external programs as key providers. Additionally, the PBKDF2 key provider now supports chaining via the `chain` parameter. ([#2023](https://github.com/opentofu/opentofu/pull/2023))
+* Added count of forgotten resources to plan and apply outputs. ([#1956](https://github.com/opentofu/opentofu/issues/1956))
+* The `element` function now accepts negative indices, which extends the existing "wrapping" model into the negative direction. In particular, choosing element `-1` selects the final element in the sequence. ([#2371](https://github.com/opentofu/opentofu/pull/2371))
+* `moved` now supports moving between different types ([#2370](https://github.com/opentofu/opentofu/pull/2370))
+* `moved` block can now be used to migrate from the `null_resource` to the `terraform_data` resource. ([#2481](https://github.com/opentofu/opentofu/pull/2481))
+* Warn on implicit references of providers without a `required_providers` entry. ([#2084](https://github.com/opentofu/opentofu/issues/2084))
+* Provider instance keys now automatically converted to string ([#2378](https://github.com/opentofu/opentofu/issues/2378))
+* Remove progress messages from commands using -concise argument ([#2549](https://github.com/opentofu/opentofu/issues/2549))
 
-* config: OpenTofu can now track some additional detail about values that won't be known until the apply step, such as the range of possible lengths for a collection or whether an unknown value can possibly be null. When this information is available, OpenTofu can potentially generate known results for some operations on unknown values. This doesn't mean that OpenTofu can immediately track that detail in all cases, but the type system now contains the facility for that and so over time we will improve the level of detail generated by built-in functions, language operators, OpenTofu providers, etc. ([#33234](https://github.com/hashicorp/terraform/issues/33234))
-* jsonplan: Added `errored` field to JSON plan output, indicating whether a plan errored. ([#33372](https://github.com/hashicorp/terraform/issues/33372))
-* cloud: Remote plans on cloud backends can now be saved using the `-out` flag, referenced in the `show` command, and applied by specifying the plan file name. ([#33492](https://github.com/hashicorp/terraform/issues/33492))
-* config: The `import` block `id` field now accepts an expression referencing other values such as resource attributes, as long as the value is a string known at plan time. ([#33618](https://github.com/hashicorp/terraform/issues/33618))
-* telemetry: All checkpoint telemetry was removed ([#151](https://github.com/opentofu/opentofu/pull/151))
-* state: Provider addresses in the statefile referring to registry.terraform.io will be treated as referring to registry.opentofu.org unless the full provider address is specified in the config or `OPENTOFU_STATEFILE_PROVIDER_ADDRESS_TRANSLATION` is set to `0`. ([#773](https://github.com/opentofu/opentofu/pull/773))
 
 BUG FIXES:
 
-* The upstream dependency that OpenTofu uses for service discovery of OpenTofu-native services such as cloud backend state storage was previously not concurrency-safe, but OpenTofu was treating it as if it was in situations like when a configuration has multiple `terraform_remote_state` blocks all using the "remote" backend. OpenTofu is now using a newer version of that library which updates its internal caches in a concurrency-safe way. ([#33364](https://github.com/hashicorp/terraform/issues/33364))
-* Transitive dependencies were lost during apply when the referenced resource expanded into zero instances ([#33403](https://github.com/hashicorp/terraform/issues/33403))
-* OpenTofu will no longer override SSH settings in local git configuration when installing modules. ([#33592](https://github.com/hashicorp/terraform/issues/33592))
-* Handle file-operation errors in `internal/states/statemgr`. ([#278](https://github.com/opentofu/opentofu/issues/278))
-* `tofu init`: OpenTofu will no longer allow downloading remote modules to invalid paths. ([#356](https://github.com/opentofu/opentofu/issues/356))
-* tofu_remote_state: Fixed a potential unsafe read panic when reading from multiple tofu_remote_state data sources ([#357](https://github.com/opentofu/opentofu/issues/357))
-* OpenTofu will now attempt to create the configuration directory `~/.terraform.d` on startup. ([#442](https://github.com/opentofu/opentofu/issues/442))
-* Conditionals with an unknown condition and sensitive branch won't crash anymore. ([#717](https://github.com/opentofu/opentofu/issues/717))
-* Fixed panic when using sensitive inputs for the ID field of an import configuration block ([#665](https://github.com/opentofu/opentofu/pull/665))
-* Fixes the ability to use KMS key aliases in the S3 backend ([#669](https://github.com/opentofu/opentofu/issues/669))
-* `GIT_SSH_COMMAND` environment variable is no longer ignored when downloading modules ([#717](https://github.com/opento
-* cloud: fixed a bug that would prevent nested symlinks from being dereferenced into the config sent to Cloud ([#686](https://github.com/opentofu/opentofu/issues/686)) 
-* cloud: state snapshots could not be disabled when header x-terraform-snapshot-interval is absent ([#687](https://github.com/opentofu/opentofu/issues/687))
-
-S3 BACKEND:
-
-* The S3 backend was upgraded to use the V2 of the AWS SDK for Go ([#691](https://github.com/opentofu/opentofu/issues/691))
-* Adds support for `shared_config_files` and `shared_credentials_files` arguments and deprecates the `shared_credentials_file` argument. ([#690](https://github.com/opentofu/opentofu/issues/690))
-* Arguments associated with assuming an IAM role were moved into a nested block - `assume_role`.
-  This deprecates the arguments `role_arn`, `session_name`, `external_id`, `assume_role_duration_seconds`, `assume_role_policy`, `assume_role_policy_arns`, `assume_role_tags`, and `assume_role_transitive_tag_keys`. ([#747](https://github.com/opentofu/opentofu/issues/747))
-* Adds support for the `assume_role_with_web_identity` block. ([#689](https://github.com/opentofu/opentofu/issues/689))
-* Adds support for account whitelisting using the `forbidden_account_ids` and `allowed_account_ids` arguments. ([#699](https://github.com/opentofu/opentofu/issues/699))
-* Adds the `custom_ca_bundle` argument. ([#689](https://github.com/opentofu/opentofu/issues/689))
-* Adds support for the `sts_region` argument. ([#695](https://github.com/opentofu/opentofu/issues/695))
-* Adds support for `ec2_metadata_service_endpoint` and `ec2_metadata_service_endpoint_mode` arguments to enable overriding the EC2 metadata service (IMDS) endpoint. ([#693](https://github.com/opentofu/opentofu/issues/693))
-* Adds support for the `retry_mode` attribute. ([#698](https://github.com/opentofu/opentofu/issues/698))
-* Adds support for the `http_proxy`, `insecure`, `use_dualstack_endpoint`, and `use_fips_endpoint` attributes. ([#694](https://github.com/opentofu/opentofu/issues/694))
-* Adds support for the `use_path_style` argument and deprecates the `force_path_style` argument. ([#783](https://github.com/opentofu/opentofu/issues/783))
-* Adds support for customizing the AWS API endpoints. ([#775](https://github.com/opentofu/opentofu/issues/775))
-* Adds support for the `skip_requesting_account_id` attribute. ([#774](https://github.com/opentofu/opentofu/issues/774))
-* Adds support for the `skip_s3_checksum` argument to allow users to disable checksum on S3 uploads for compatibility with non AWS "S3-compatible" APIs. ([#778](https://github.com/opentofu/opentofu/issues/778))
+- Fixed an issue where an invalid provider name in the `provider_meta` block would crash OpenTofu rather than report an error ([#2347](https://github.com/opentofu/opentofu/pull/2347))
+- When assigning an empty map to a variable that is declared as a map of an object type with at least one optional attribute, OpenTofu will no longer create a subtly-broken value. ([#2371](https://github.com/opentofu/opentofu/pull/2371))
+- The `format` and `formatlist` functions can now accept `null` as one of the arguments without causing problems during the apply phase. Previously these functions would incorrectly return an unknown value when given `null` and so could cause a failure during the apply phase where no unknown values are allowed. ([#2371](https://github.com/opentofu/opentofu/pull/2371))
+- Provider used in import is correctly identified. ([#2336](https://github.com/opentofu/opentofu/pull/2336))
+- `plantimestamp()` now returns unknown value during validation ([#2397](https://github.com/opentofu/opentofu/issues/2397))
+- Syntax error in the `required_providers` block does not panic anymore, but yields "syntax error" ([2344](https://github.com/opentofu/opentofu/issues/2344))
+- Changing Go version to 1.22.11 in order to fix [CVE-2024-45336](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-45336) and [CVE-2024-45341](https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-45341) ([#2438](https://github.com/opentofu/opentofu/pull/2438))
+- Fix the error message when default value of a complex variable is containing a wrong type ([2394](https://github.com/opentofu/opentofu/issues/2394))
+- Fix the way OpenTofu downloads a module that is sourced from a GitHub branch containing slashes in the name. ([2396](https://github.com/opentofu/opentofu/issues/2396))
+- `pg` backend doesn't fail on workspace creation for paralel runs, when the database is shared across multiple projects. ([#2411](https://github.com/opentofu/opentofu/pull/2411))
+- Generating an OpenTofu configuration from an `import` block that is referencing a resource with nested attributes now works correctly, instead of giving an error that the nested computed attribute is required. ([#2372](https://github.com/opentofu/opentofu/issues/2372)) 
+- `base64gunzip` now doesn't expose sensitive values if it fails during the base64 decoding. ([#2503](https://github.com/opentofu/opentofu/pull/2503))
+- Fix loading only the necessary encryption key providers and methods for better `terraform_remote_state` support. ([2551](https://github.com/opentofu/opentofu/issues/2551))
 
 ## Previous Releases
 
 For information on prior major and minor releases, see their changelogs:
 
-None yet
+- [v1.9](https://github.com/opentofu/opentofu/blob/v1.9/CHANGELOG.md)
+- [v1.8](https://github.com/opentofu/opentofu/blob/v1.8/CHANGELOG.md)
+- [v1.7](https://github.com/opentofu/opentofu/blob/v1.7/CHANGELOG.md)
+- [v1.6](https://github.com/opentofu/opentofu/blob/v1.6/CHANGELOG.md)

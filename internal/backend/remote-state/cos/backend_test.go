@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package cos
 
 import (
-	"context"
 	"crypto/md5"
 	"fmt"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/opentofu/opentofu/internal/backend"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/states/remote"
 )
 
@@ -64,9 +66,7 @@ func TestRemoteClient(t *testing.T) {
 	be := setupBackend(t, bucket, defaultPrefix, defaultKey, false)
 	defer teardownBackend(t, be)
 
-	ctx := context.Background()
-
-	ss, err := be.StateMgr(ctx, backend.DefaultStateName)
+	ss, err := be.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err)
 	}
@@ -88,9 +88,7 @@ func TestRemoteClientWithPrefix(t *testing.T) {
 	be := setupBackend(t, bucket, prefix, defaultKey, false)
 	defer teardownBackend(t, be)
 
-	ctx := context.Background()
-
-	ss, err := be.StateMgr(ctx, backend.DefaultStateName)
+	ss, err := be.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err)
 	}
@@ -111,9 +109,7 @@ func TestRemoteClientWithEncryption(t *testing.T) {
 	be := setupBackend(t, bucket, defaultPrefix, defaultKey, true)
 	defer teardownBackend(t, be)
 
-	ctx := context.Background()
-
-	ss, err := be.StateMgr(ctx, backend.DefaultStateName)
+	ss, err := be.StateMgr(backend.DefaultStateName)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err)
 	}
@@ -135,9 +131,7 @@ func TestRemoteLocks(t *testing.T) {
 	defer teardownBackend(t, be)
 
 	remoteClient := func() (remote.Client, error) {
-		ctx := context.Background()
-
-		ss, err := be.StateMgr(ctx, backend.DefaultStateName)
+		ss, err := be.StateMgr(backend.DefaultStateName)
 		if err != nil {
 			return nil, err
 		}
@@ -219,7 +213,7 @@ func setupBackend(t *testing.T, bucket, prefix, key string, encrypt bool) backen
 	}
 
 	if os.Getenv(PROVIDER_REGION) == "" {
-		os.Setenv(PROVIDER_REGION, "ap-guangzhou")
+		t.Setenv(PROVIDER_REGION, "ap-guangzhou")
 	}
 
 	appId := os.Getenv("TF_COS_APPID")
@@ -232,7 +226,7 @@ func setupBackend(t *testing.T, bucket, prefix, key string, encrypt bool) backen
 		"key":    key,
 	}
 
-	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(config))
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(config))
 	be := b.(*Backend)
 
 	c, err := be.client("tencentcloud")
@@ -240,7 +234,7 @@ func setupBackend(t *testing.T, bucket, prefix, key string, encrypt bool) backen
 		t.Fatalf("unexpected error: %s", err)
 	}
 
-	err = c.putBucket(context.Background())
+	err = c.putBucket()
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err)
 	}
@@ -256,7 +250,7 @@ func teardownBackend(t *testing.T, b backend.Backend) {
 		t.Fatalf("unexpected error: %s", err)
 	}
 
-	err = c.deleteBucket(context.Background(), true)
+	err = c.deleteBucket(true)
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err)
 	}

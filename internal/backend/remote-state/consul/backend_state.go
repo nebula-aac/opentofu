@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package consul
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -18,7 +19,7 @@ const (
 	keyEnvPrefix = "-env:"
 )
 
-func (b *Backend) Workspaces(ctx context.Context) ([]string, error) {
+func (b *Backend) Workspaces() ([]string, error) {
 	// List our raw path
 	prefix := b.configData.Get("path").(string) + keyEnvPrefix
 	keys, _, err := b.client.KV().Keys(prefix, "/", nil)
@@ -46,14 +47,14 @@ func (b *Backend) Workspaces(ctx context.Context) ([]string, error) {
 
 	result := make([]string, 1, len(envs)+1)
 	result[0] = backend.DefaultStateName
-	for k := range envs {
+	for k, _ := range envs {
 		result = append(result, k)
 	}
 
 	return result, nil
 }
 
-func (b *Backend) DeleteWorkspace(_ context.Context, name string, _ bool) error {
+func (b *Backend) DeleteWorkspace(name string, _ bool) error {
 	if name == backend.DefaultStateName || name == "" {
 		return fmt.Errorf("can't delete default state")
 	}
@@ -67,7 +68,7 @@ func (b *Backend) DeleteWorkspace(_ context.Context, name string, _ bool) error 
 	return err
 }
 
-func (b *Backend) StateMgr(ctx context.Context, name string) (statemgr.Full, error) {
+func (b *Backend) StateMgr(name string) (statemgr.Full, error) {
 	// Determine the path of the data
 	path := b.path(name)
 
@@ -75,14 +76,15 @@ func (b *Backend) StateMgr(ctx context.Context, name string) (statemgr.Full, err
 	gzip := b.configData.Get("gzip").(bool)
 
 	// Build the state client
-	var stateMgr = &remote.State{
-		Client: &RemoteClient{
+	var stateMgr = remote.NewState(
+		&RemoteClient{
 			Client:    b.client,
 			Path:      path,
 			GZip:      gzip,
 			lockState: b.lock,
 		},
-	}
+		b.encryption,
+	)
 
 	if !b.lock {
 		stateMgr.DisableLocks()
@@ -98,14 +100,14 @@ func (b *Backend) StateMgr(ctx context.Context, name string) (statemgr.Full, err
 	// so States() knows it exists.
 	lockInfo := statemgr.NewLockInfo()
 	lockInfo.Operation = "init"
-	lockId, err := stateMgr.Lock(ctx, lockInfo)
+	lockId, err := stateMgr.Lock(lockInfo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to lock state in Consul: %w", err)
 	}
 
 	// Local helper function so we can call it multiple places
 	lockUnlock := func(parent error) error {
-		if err := stateMgr.Unlock(ctx, lockId); err != nil {
+		if err := stateMgr.Unlock(lockId); err != nil {
 			return fmt.Errorf(strings.TrimSpace(errStateUnlock), lockId, err)
 		}
 
@@ -113,7 +115,7 @@ func (b *Backend) StateMgr(ctx context.Context, name string) (statemgr.Full, err
 	}
 
 	// Grab the value
-	if err := stateMgr.RefreshState(ctx); err != nil {
+	if err := stateMgr.RefreshState(); err != nil {
 		err = lockUnlock(err)
 		return nil, err
 	}
@@ -124,7 +126,7 @@ func (b *Backend) StateMgr(ctx context.Context, name string) (statemgr.Full, err
 			err = lockUnlock(err)
 			return nil, err
 		}
-		if err := stateMgr.PersistState(ctx, nil); err != nil {
+		if err := stateMgr.PersistState(nil); err != nil {
 			err = lockUnlock(err)
 			return nil, err
 		}

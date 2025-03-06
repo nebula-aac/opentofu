@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package remote
@@ -124,6 +126,14 @@ func (b *Remote) opPlan(stopCtx, cancelCtx context.Context, op *backend.Operatio
 				),
 			))
 		}
+	}
+
+	if len(op.Excludes) != 0 {
+		diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Error,
+			"-exclude option is not supported",
+			"The -exclude option is not currently supported for remote plans.",
+		))
 	}
 
 	if !op.PlanRefresh {
@@ -327,11 +337,13 @@ in order to capture the filesystem context the remote workspace expects:
 		return r, generalError("Failed to create run", err)
 	}
 
+	panicHandler := logging.PanicHandlerWithTraceFn()
+
 	// When the lock timeout is set, if the run is still pending and
 	// cancellable after that period, we attempt to cancel it.
 	if lockTimeout := op.StateLocker.Timeout(); lockTimeout > 0 {
 		go func() {
-			defer logging.PanicHandler()
+			defer panicHandler()
 
 			select {
 			case <-stopCtx.Done():
@@ -351,7 +363,7 @@ in order to capture the filesystem context the remote workspace expects:
 						b.CLI.Output(b.Colorize().Color(strings.TrimSpace(lockTimeoutErr)))
 					}
 
-					// We abuse the auto aprove flag to indicate that we do not
+					// We abuse the auto approve flag to indicate that we do not
 					// want to ask if the remote operation should be canceled.
 					op.AutoApprove = true
 

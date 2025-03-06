@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 // Package init contains the list of backends that can be initialized and
@@ -6,11 +8,11 @@
 package init
 
 import (
-	"context"
 	"sync"
 
 	"github.com/hashicorp/terraform-svchost/disco"
 	"github.com/opentofu/opentofu/internal/backend"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/tfdiags"
 	"github.com/zclconf/go-cty/cty"
 
@@ -52,25 +54,29 @@ func Init(services *disco.Disco) {
 	backendsLock.Lock()
 	defer backendsLock.Unlock()
 
+	// NOTE: Underscore-prefixed named are reserved for unit testing use via
+	// the RegisterTemp function. Do not add any underscore-prefixed names
+	// to the following table.
+
 	backends = map[string]backend.InitFn{
-		"local":  func() backend.Backend { return backendLocal.New() },
-		"remote": func() backend.Backend { return backendRemote.New(services) },
+		"local":  func(enc encryption.StateEncryption) backend.Backend { return backendLocal.New(enc) },
+		"remote": func(enc encryption.StateEncryption) backend.Backend { return backendRemote.New(services, enc) },
 
 		// Remote State backends.
-		"azurerm":    func() backend.Backend { return backendAzure.New() },
-		"consul":     func() backend.Backend { return backendConsul.New() },
-		"cos":        func() backend.Backend { return backendCos.New() },
-		"gcs":        func() backend.Backend { return backendGCS.New() },
-		"http":       func() backend.Backend { return backendHTTP.New() },
-		"inmem":      func() backend.Backend { return backendInmem.New() },
-		"kubernetes": func() backend.Backend { return backendKubernetes.New() },
-		"oss":        func() backend.Backend { return backendOSS.New() },
-		"pg":         func() backend.Backend { return backendPg.New() },
-		"s3":         func() backend.Backend { return backendS3.New() },
+		"azurerm":    func(enc encryption.StateEncryption) backend.Backend { return backendAzure.New(enc) },
+		"consul":     func(enc encryption.StateEncryption) backend.Backend { return backendConsul.New(enc) },
+		"cos":        func(enc encryption.StateEncryption) backend.Backend { return backendCos.New(enc) },
+		"gcs":        func(enc encryption.StateEncryption) backend.Backend { return backendGCS.New(enc) },
+		"http":       func(enc encryption.StateEncryption) backend.Backend { return backendHTTP.New(enc) },
+		"inmem":      func(enc encryption.StateEncryption) backend.Backend { return backendInmem.New(enc) },
+		"kubernetes": func(enc encryption.StateEncryption) backend.Backend { return backendKubernetes.New(enc) },
+		"oss":        func(enc encryption.StateEncryption) backend.Backend { return backendOSS.New(enc) },
+		"pg":         func(enc encryption.StateEncryption) backend.Backend { return backendPg.New(enc) },
+		"s3":         func(enc encryption.StateEncryption) backend.Backend { return backendS3.New(enc) },
 
 		// Terraform Cloud 'backend'
 		// This is an implementation detail only, used for the cloud package
-		"cloud": func() backend.Backend { return backendCloud.New(services) },
+		"cloud": func(enc encryption.StateEncryption) backend.Backend { return backendCloud.New(services, enc) },
 	}
 
 	RemovedBackends = map[string]string{
@@ -98,6 +104,10 @@ func Backend(name string) backend.InitFn {
 // This method sets this backend globally and care should be taken to do
 // this only before OpenTofu is executing to prevent odd behavior of backends
 // changing mid-execution.
+//
+// NOTE: Underscore-prefixed named are reserved for unit testing use via
+// the RegisterTemp function. Do not add any underscore-prefixed names
+// using this function.
 func Set(name string, f backend.InitFn) {
 	backendsLock.Lock()
 	defer backendsLock.Unlock()
@@ -119,12 +129,12 @@ type deprecatedBackendShim struct {
 
 // PrepareConfig delegates to the wrapped backend to validate its config
 // and then appends shim's deprecation warning.
-func (b deprecatedBackendShim) PrepareConfig(ctx context.Context, obj cty.Value) (cty.Value, tfdiags.Diagnostics) {
-	newObj, diags := b.Backend.PrepareConfig(ctx, obj)
+func (b deprecatedBackendShim) PrepareConfig(obj cty.Value) (cty.Value, tfdiags.Diagnostics) {
+	newObj, diags := b.Backend.PrepareConfig(obj)
 	return newObj, diags.Append(tfdiags.SimpleWarning(b.Message))
 }
 
-// DeprecateBackend can be used to wrap a backend to retrun a deprecation
+// DeprecateBackend can be used to wrap a backend to return a deprecation
 // warning during validation.
 func deprecateBackend(b backend.Backend, message string) backend.Backend {
 	// Since a Backend wrapped by deprecatedBackendShim can no longer be

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package main
@@ -259,7 +261,7 @@ func skipWithoutRemoteTerraformVersion(t *testing.T) {
 	version := tfversion.Version
 	baseVersion, err := goversion.NewVersion(version)
 	if err != nil {
-		t.Fatalf(fmt.Sprintf("Error instantiating go-version for %s", version))
+		t.Fatalf("Error instantiating go-version for %s", version)
 	}
 	opts := &tfe.AdminTerraformVersionsListOptions{
 		ListOptions: tfe.ListOptions{

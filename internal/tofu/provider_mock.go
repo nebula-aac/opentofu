@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -51,6 +53,12 @@ type MockProvider struct {
 	UpgradeResourceStateRequest  providers.UpgradeResourceStateRequest
 	UpgradeResourceStateFn       func(providers.UpgradeResourceStateRequest) providers.UpgradeResourceStateResponse
 
+	MoveResourceStateCalled   bool
+	MoveResourceStateTypeName string
+	MoveResourceStateResponse *providers.MoveResourceStateResponse
+	MoveResourceStateRequest  providers.MoveResourceStateRequest
+	MoveResourceStateFn       func(providers.MoveResourceStateRequest) providers.MoveResourceStateResponse
+
 	ConfigureProviderCalled   bool
 	ConfigureProviderResponse *providers.ConfigureProviderResponse
 	ConfigureProviderRequest  providers.ConfigureProviderRequest
@@ -84,6 +92,15 @@ type MockProvider struct {
 	ReadDataSourceResponse *providers.ReadDataSourceResponse
 	ReadDataSourceRequest  providers.ReadDataSourceRequest
 	ReadDataSourceFn       func(providers.ReadDataSourceRequest) providers.ReadDataSourceResponse
+
+	GetFunctionsCalled   bool
+	GetFunctionsResponse *providers.GetFunctionsResponse
+	GetFunctionsFn       func() providers.GetFunctionsResponse
+
+	CallFunctionCalled   bool
+	CallFunctionResponse *providers.CallFunctionResponse
+	CallFunctionRequest  providers.CallFunctionRequest
+	CallFunctionFn       func(providers.CallFunctionRequest) providers.CallFunctionResponse
 
 	CloseCalled bool
 	CloseError  error
@@ -237,6 +254,59 @@ func (p *MockProvider) UpgradeResourceState(r providers.UpgradeResourceStateRequ
 		resp.UpgradedState = v
 	}
 
+	return resp
+}
+
+func (p *MockProvider) MoveResourceState(r providers.MoveResourceStateRequest) providers.MoveResourceStateResponse {
+	var resp providers.MoveResourceStateResponse
+	p.Lock()
+	defer p.Unlock()
+
+	if !p.ConfigureProviderCalled {
+		resp.Diagnostics = resp.Diagnostics.Append(fmt.Errorf("configure not called before MoveResourceState %s -> %s", r.SourceTypeName, r.TargetTypeName))
+		return resp
+	}
+
+	schema, ok := p.getProviderSchema().ResourceTypes[r.SourceTypeName]
+	if !ok {
+		resp.Diagnostics = resp.Diagnostics.Append(fmt.Errorf("no schema found for %q", r.SourceTypeName))
+		return resp
+	}
+
+	schemaType := schema.Block.ImpliedType()
+
+	p.MoveResourceStateCalled = true
+	p.MoveResourceStateRequest = r
+
+	if p.MoveResourceStateFn != nil {
+		return p.MoveResourceStateFn(r)
+	}
+
+	if p.MoveResourceStateResponse != nil {
+		return *p.MoveResourceStateResponse
+	}
+
+	switch {
+	case r.SourceStateFlatmap != nil:
+		v, err := hcl2shim.HCL2ValueFromFlatmap(r.SourceStateFlatmap, schemaType)
+		if err != nil {
+			resp.Diagnostics = resp.Diagnostics.Append(err)
+			return resp
+		}
+		resp.TargetState = v
+	case len(r.SourceStateJSON) > 0:
+		v, err := ctyjson.Unmarshal(r.SourceStateJSON, schemaType)
+
+		if err != nil {
+			resp.Diagnostics = resp.Diagnostics.Append(err)
+			return resp
+		}
+		resp.TargetState = v
+	default:
+		resp.TargetState = cty.NullVal(schemaType)
+	}
+
+	resp.TargetPrivate = r.SourcePrivate
 	return resp
 }
 
@@ -395,9 +465,9 @@ func (p *MockProvider) PlanResourceChange(r providers.PlanResourceChangeRequest)
 
 func (p *MockProvider) ApplyResourceChange(r providers.ApplyResourceChangeRequest) (resp providers.ApplyResourceChangeResponse) {
 	p.Lock()
+	defer p.Unlock()
 	p.ApplyResourceChangeCalled = true
 	p.ApplyResourceChangeRequest = r
-	p.Unlock()
 
 	if !p.ConfigureProviderCalled {
 		resp.Diagnostics = resp.Diagnostics.Append(fmt.Errorf("Configure not called before ApplyResourceChange %q", r.TypeName))
@@ -464,9 +534,13 @@ func (p *MockProvider) ImportResourceState(r providers.ImportResourceStateReques
 	}
 
 	if p.ImportResourceStateResponse != nil {
-		resp = *p.ImportResourceStateResponse
+		// There's no guarantee that the imported resources slice isn't being read somewhere else
+		// As such, any changes we make on it (including through pointers) would lead to data races.
+		// To avoid that, copy and make changes on the copy
+		resp.ImportedResources = make([]providers.ImportedResource, len(p.ImportResourceStateResponse.ImportedResources))
+
 		// fixup the cty value to match the schema
-		for i, res := range resp.ImportedResources {
+		for i, res := range p.ImportResourceStateResponse.ImportedResources {
 			schema, ok := p.getProviderSchema().ResourceTypes[res.TypeName]
 			if !ok {
 				resp.Diagnostics = resp.Diagnostics.Append(fmt.Errorf("no schema found for %q", res.TypeName))
@@ -486,7 +560,6 @@ func (p *MockProvider) ImportResourceState(r providers.ImportResourceStateReques
 
 	return resp
 }
-
 func (p *MockProvider) ReadDataSource(r providers.ReadDataSourceRequest) (resp providers.ReadDataSourceResponse) {
 	p.Lock()
 	defer p.Unlock()
@@ -507,6 +580,39 @@ func (p *MockProvider) ReadDataSource(r providers.ReadDataSourceRequest) (resp p
 		resp = *p.ReadDataSourceResponse
 	}
 
+	return resp
+}
+
+func (p *MockProvider) GetFunctions() (resp providers.GetFunctionsResponse) {
+	p.Lock()
+	defer p.Unlock()
+
+	p.GetFunctionsCalled = true
+
+	if p.GetFunctionsFn != nil {
+		return p.GetFunctionsFn()
+	}
+
+	if p.GetFunctionsResponse != nil {
+		resp = *p.GetFunctionsResponse
+	}
+	return resp
+}
+
+func (p *MockProvider) CallFunction(r providers.CallFunctionRequest) (resp providers.CallFunctionResponse) {
+	p.Lock()
+	defer p.Unlock()
+
+	p.CallFunctionCalled = true
+	p.CallFunctionRequest = r
+
+	if p.CallFunctionFn != nil {
+		return p.CallFunctionFn(r)
+	}
+
+	if p.CallFunctionResponse != nil {
+		resp = *p.CallFunctionResponse
+	}
 	return resp
 }
 

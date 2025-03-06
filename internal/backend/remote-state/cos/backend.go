@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package cos
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/opentofu/opentofu/internal/backend"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/legacy/helper/schema"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
@@ -36,11 +39,13 @@ const (
 // Backend implements "backend".Backend for tencentCloud cos
 type Backend struct {
 	*schema.Backend
+	encryption encryption.StateEncryption
 	credential *common.Credential
 
-	cosClient *cos.Client
-	tagClient *tag.Client
-	stsClient *sts.Client
+	cosContext context.Context
+	cosClient  *cos.Client
+	tagClient  *tag.Client
+	stsClient  *sts.Client
 
 	region  string
 	bucket  string
@@ -51,7 +56,7 @@ type Backend struct {
 }
 
 // New creates a new backend for TencentCloud cos remote state.
-func New() backend.Backend {
+func New(enc encryption.StateEncryption) backend.Backend {
 	s := &schema.Backend{
 		Schema: map[string]*schema.Schema{
 			"secret_id": {
@@ -179,7 +184,7 @@ func New() backend.Backend {
 		},
 	}
 
-	result := &Backend{Backend: s}
+	result := &Backend{Backend: s, encryption: enc}
 	result.Backend.ConfigureFunc = result.configure
 
 	return result
@@ -206,7 +211,8 @@ func (b *Backend) configure(ctx context.Context) error {
 		return nil
 	}
 
-	data := schema.FromContextBackendConfig(ctx)
+	b.cosContext = ctx
+	data := schema.FromContextBackendConfig(b.cosContext)
 
 	b.region = data.Get("region").(string)
 	b.bucket = data.Get("bucket").(string)

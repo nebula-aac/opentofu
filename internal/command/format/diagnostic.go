@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package format
@@ -10,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hashicorp/hcl/v2"
 	viewsjson "github.com/opentofu/opentofu/internal/command/views/json"
 	"github.com/opentofu/opentofu/internal/tfdiags"
 
@@ -29,7 +32,7 @@ var disabledColorize = &colorstring.Colorize{
 // at all. Although the long-form text parts of the message are wrapped,
 // not all aspects of the message are guaranteed to fit within the specified
 // terminal width.
-func Diagnostic(diag tfdiags.Diagnostic, sources map[string][]byte, color *colorstring.Colorize, width int) string {
+func Diagnostic(diag tfdiags.Diagnostic, sources map[string]*hcl.File, color *colorstring.Colorize, width int) string {
 	return DiagnosticFromJSON(viewsjson.NewDiagnostic(diag, sources), color, width)
 }
 
@@ -67,7 +70,7 @@ func DiagnosticFromJSON(diag *viewsjson.Diagnostic, color *colorstring.Colorize,
 		leftRuleEnd = color.Color("[yellow]╵[reset]")
 		leftRuleWidth = 2
 	default:
-		// Clear out any coloring that might be applied by Terraform's UI helper,
+		// Clear out any coloring that might be applied by OpenTofu's UI helper,
 		// so our result is not context-sensitive.
 		buf.WriteString(color.Color("\n[reset]"))
 	}
@@ -124,8 +127,8 @@ func DiagnosticFromJSON(diag *viewsjson.Diagnostic, color *colorstring.Colorize,
 // virtual terminal formatting sequences.
 //
 // It is intended for use in automation and other contexts in which diagnostic
-// messages are parsed from the Terraform output.
-func DiagnosticPlain(diag tfdiags.Diagnostic, sources map[string][]byte, width int) string {
+// messages are parsed from the OpenTofu output.
+func DiagnosticPlain(diag tfdiags.Diagnostic, sources map[string]*hcl.File, width int) string {
 	return DiagnosticPlainFromJSON(viewsjson.NewDiagnostic(diag, sources), width)
 }
 
@@ -184,7 +187,7 @@ func DiagnosticWarningsCompact(diags tfdiags.Diagnostics, color *colorstring.Col
 	var b strings.Builder
 	b.WriteString(color.Color("[bold][yellow]Warnings:[reset]\n\n"))
 	for _, diag := range diags {
-		sources := tfdiags.WarningGroupSourceRanges(diag)
+		sources := tfdiags.ConsolidatedGroupSourceRanges(diag)
 		b.WriteString(fmt.Sprintf("- %s\n", diag.Description().Summary))
 		if len(sources) > 0 {
 			mainSource := sources[0]
@@ -205,7 +208,7 @@ func DiagnosticWarningsCompact(diags tfdiags.Diagnostics, color *colorstring.Col
 				}
 			} else if len(sources) > 1 {
 				b.WriteString(fmt.Sprintf(
-					"  (%d occurences of this warning)\n",
+					"  (%d occurrences of this warning)\n",
 					len(sources),
 				))
 			}

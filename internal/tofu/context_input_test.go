@@ -1,9 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"sync"
@@ -62,7 +65,7 @@ func TestContext2Input_provider(t *testing.T) {
 		return
 	}
 
-	if diags := ctx.Input(m, InputModeStd); diags.HasErrors() {
+	if diags := ctx.Input(context.Background(), m, InputModeStd); diags.HasErrors() {
 		t.Fatalf("input errors: %s", diags.Err())
 	}
 
@@ -73,10 +76,10 @@ func TestContext2Input_provider(t *testing.T) {
 		t.Errorf("wrong description\ngot:  %q\nwant: %q", got, want)
 	}
 
-	plan, diags := ctx.Plan(m, states.NewState(), DefaultPlanOpts)
+	plan, diags := ctx.Plan(context.Background(), m, states.NewState(), DefaultPlanOpts)
 	assertNoErrors(t, diags)
 
-	if _, diags := ctx.Apply(plan, m); diags.HasErrors() {
+	if _, diags := ctx.Apply(context.Background(), plan, m); diags.HasErrors() {
 		t.Fatalf("apply errors: %s", diags.Err())
 	}
 
@@ -140,11 +143,11 @@ func TestContext2Input_providerMulti(t *testing.T) {
 	var actual []interface{}
 	var lock sync.Mutex
 
-	if diags := ctx.Input(m, InputModeStd); diags.HasErrors() {
+	if diags := ctx.Input(context.Background(), m, InputModeStd); diags.HasErrors() {
 		t.Fatalf("input errors: %s", diags.Err())
 	}
 
-	plan, diags := ctx.Plan(m, states.NewState(), DefaultPlanOpts)
+	plan, diags := ctx.Plan(context.Background(), m, states.NewState(), DefaultPlanOpts)
 	assertNoErrors(t, diags)
 
 	providerFactory = func() (providers.Interface, error) {
@@ -159,7 +162,7 @@ func TestContext2Input_providerMulti(t *testing.T) {
 		return p, nil
 	}
 
-	if _, diags := ctx.Apply(plan, m); diags.HasErrors() {
+	if _, diags := ctx.Apply(context.Background(), plan, m); diags.HasErrors() {
 		t.Fatalf("apply errors: %s", diags.Err())
 	}
 
@@ -178,7 +181,7 @@ func TestContext2Input_providerOnce(t *testing.T) {
 		},
 	})
 
-	if diags := ctx.Input(m, InputModeStd); diags.HasErrors() {
+	if diags := ctx.Input(context.Background(), m, InputModeStd); diags.HasErrors() {
 		t.Fatalf("input errors: %s", diags.Err())
 	}
 }
@@ -228,14 +231,14 @@ func TestContext2Input_providerId(t *testing.T) {
 		"provider.aws.foo": "bar",
 	}
 
-	if diags := ctx.Input(m, InputModeStd); diags.HasErrors() {
+	if diags := ctx.Input(context.Background(), m, InputModeStd); diags.HasErrors() {
 		t.Fatalf("input errors: %s", diags.Err())
 	}
 
-	plan, diags := ctx.Plan(m, states.NewState(), DefaultPlanOpts)
+	plan, diags := ctx.Plan(context.Background(), m, states.NewState(), DefaultPlanOpts)
 	assertNoErrors(t, diags)
 
-	if _, diags := ctx.Apply(plan, m); diags.HasErrors() {
+	if _, diags := ctx.Apply(context.Background(), plan, m); diags.HasErrors() {
 		t.Fatalf("apply errors: %s", diags.Err())
 	}
 
@@ -286,7 +289,7 @@ func TestContext2Input_providerOnly(t *testing.T) {
 		return
 	}
 
-	if err := ctx.Input(m, InputModeProvider); err != nil {
+	if err := ctx.Input(context.Background(), m, InputModeProvider); err != nil {
 		t.Fatalf("err: %s", err)
 	}
 
@@ -298,7 +301,7 @@ func TestContext2Input_providerOnly(t *testing.T) {
 	// normal Input test, but we're preserving it until we have time to review
 	// and make sure this isn't inadvertently providing unique test coverage
 	// other than what it set out to test.
-	plan, diags := ctx.Plan(m, states.NewState(), &PlanOpts{
+	plan, diags := ctx.Plan(context.Background(), m, states.NewState(), &PlanOpts{
 		Mode: plans.NormalMode,
 		SetVariables: InputValues{
 			"foo": &InputValue{
@@ -309,7 +312,7 @@ func TestContext2Input_providerOnly(t *testing.T) {
 	})
 	assertNoErrors(t, diags)
 
-	state, err := ctx.Apply(plan, m)
+	state, err := ctx.Apply(context.Background(), plan, m)
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -319,7 +322,7 @@ func TestContext2Input_providerOnly(t *testing.T) {
 	}
 
 	actualStr := strings.TrimSpace(state.String())
-	expectedStr := strings.TrimSpace(testTerraformInputProviderOnlyStr)
+	expectedStr := strings.TrimSpace(testTofuInputProviderOnlyStr)
 	if actualStr != expectedStr {
 		t.Fatalf("wrong result\n\ngot:\n%s\n\nwant:\n%s", actualStr, expectedStr)
 	}
@@ -345,11 +348,11 @@ func TestContext2Input_providerVars(t *testing.T) {
 		actual = req.Config.GetAttr("foo").AsString()
 		return
 	}
-	if diags := ctx.Input(m, InputModeStd); diags.HasErrors() {
+	if diags := ctx.Input(context.Background(), m, InputModeStd); diags.HasErrors() {
 		t.Fatalf("input errors: %s", diags.Err())
 	}
 
-	plan, diags := ctx.Plan(m, states.NewState(), &PlanOpts{
+	plan, diags := ctx.Plan(context.Background(), m, states.NewState(), &PlanOpts{
 		Mode: plans.NormalMode,
 		SetVariables: InputValues{
 			"foo": &InputValue{
@@ -360,7 +363,7 @@ func TestContext2Input_providerVars(t *testing.T) {
 	})
 	assertNoErrors(t, diags)
 
-	if _, diags := ctx.Apply(plan, m); diags.HasErrors() {
+	if _, diags := ctx.Apply(context.Background(), plan, m); diags.HasErrors() {
 		t.Fatalf("apply errors: %s", diags.Err())
 	}
 
@@ -380,7 +383,7 @@ func TestContext2Input_providerVarsModuleInherit(t *testing.T) {
 		UIInput: input,
 	})
 
-	if diags := ctx.Input(m, InputModeStd); diags.HasErrors() {
+	if diags := ctx.Input(context.Background(), m, InputModeStd); diags.HasErrors() {
 		t.Fatalf("input errors: %s", diags.Err())
 	}
 }
@@ -397,7 +400,7 @@ func TestContext2Input_submoduleTriggersInvalidCount(t *testing.T) {
 		UIInput: input,
 	})
 
-	if diags := ctx.Input(m, InputModeStd); diags.HasErrors() {
+	if diags := ctx.Input(context.Background(), m, InputModeStd); diags.HasErrors() {
 		t.Fatalf("input errors: %s", diags.Err())
 	}
 }
@@ -444,6 +447,7 @@ func TestContext2Input_dataSourceRequiresRefresh(t *testing.T) {
 				Provider: addrs.NewDefaultProvider("null"),
 				Module:   addrs.RootModule,
 			},
+			addrs.NoKey,
 		)
 	})
 
@@ -454,7 +458,7 @@ func TestContext2Input_dataSourceRequiresRefresh(t *testing.T) {
 		UIInput: input,
 	})
 
-	if diags := ctx.Input(m, InputModeStd); diags.HasErrors() {
+	if diags := ctx.Input(context.Background(), m, InputModeStd); diags.HasErrors() {
 		t.Fatalf("input errors: %s", diags.Err())
 	}
 
@@ -463,10 +467,10 @@ func TestContext2Input_dataSourceRequiresRefresh(t *testing.T) {
 	// a wrapper around plan anyway, but we're keeping it until we get a
 	// chance to review and check whether it's giving us any additional
 	// test coverage aside from what it's specifically intending to test.
-	if _, diags := ctx.Refresh(m, state, DefaultPlanOpts); diags.HasErrors() {
+	if _, diags := ctx.Refresh(context.Background(), m, state, DefaultPlanOpts); diags.HasErrors() {
 		t.Fatalf("refresh errors: %s", diags.Err())
 	}
-	if _, diags := ctx.Plan(m, state, DefaultPlanOpts); diags.HasErrors() {
+	if _, diags := ctx.Plan(context.Background(), m, state, DefaultPlanOpts); diags.HasErrors() {
 		t.Fatalf("plan errors: %s", diags.Err())
 	}
 }

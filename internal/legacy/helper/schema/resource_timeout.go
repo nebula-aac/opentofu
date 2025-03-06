@@ -1,6 +1,9 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
+//nolint:cyclop,funlen,nestif // This legacy code is frozen from an older version of the codebase and will not be updated to pass any linters.
 package schema
 
 import (
@@ -131,7 +134,7 @@ func (t *ResourceTimeout) ConfigDecode(s *Resource, c *tofu.ResourceConfig) erro
 					timeout = t.Default
 				}
 
-				// If the resource has not delcared this in the definition, then error
+				// If the resource has not declared this in the definition, then error
 				// with an unsupported message
 				if timeout == nil {
 					return unsupportedTimeoutKeyError(timeKey)

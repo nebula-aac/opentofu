@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package inmem
 
 import (
-	"context"
 	"crypto/md5"
 
 	"github.com/opentofu/opentofu/internal/states/remote"
@@ -18,7 +19,7 @@ type RemoteClient struct {
 	Name string
 }
 
-func (c *RemoteClient) Get(context.Context) (*remote.Payload, error) {
+func (c *RemoteClient) Get() (*remote.Payload, error) {
 	if c.Data == nil {
 		return nil, nil
 	}
@@ -29,7 +30,7 @@ func (c *RemoteClient) Get(context.Context) (*remote.Payload, error) {
 	}, nil
 }
 
-func (c *RemoteClient) Put(_ context.Context, data []byte) error {
+func (c *RemoteClient) Put(data []byte) error {
 	md5 := md5.Sum(data)
 
 	c.Data = data
@@ -37,15 +38,15 @@ func (c *RemoteClient) Put(_ context.Context, data []byte) error {
 	return nil
 }
 
-func (c *RemoteClient) Delete(context.Context) error {
+func (c *RemoteClient) Delete() error {
 	c.Data = nil
 	c.MD5 = nil
 	return nil
 }
 
-func (c *RemoteClient) Lock(_ context.Context, info *statemgr.LockInfo) (string, error) {
+func (c *RemoteClient) Lock(info *statemgr.LockInfo) (string, error) {
 	return locks.lock(c.Name, info)
 }
-func (c *RemoteClient) Unlock(_ context.Context, id string) error {
+func (c *RemoteClient) Unlock(id string) error {
 	return locks.unlock(c.Name, id)
 }

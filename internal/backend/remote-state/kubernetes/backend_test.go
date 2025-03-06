@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package kubernetes
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/opentofu/opentofu/internal/backend"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/states/statemgr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -50,7 +53,7 @@ func TestBackend(t *testing.T) {
 	testACC(t)
 	defer cleanupK8sResources(t)
 
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"secret_suffix": secretSuffix,
 	}))
 
@@ -63,11 +66,11 @@ func TestBackendLocks(t *testing.T) {
 	defer cleanupK8sResources(t)
 
 	// Get the backend. We need two to test locking.
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"secret_suffix": secretSuffix,
 	}))
 
-	b2 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b2 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"secret_suffix": secretSuffix,
 	}))
 
@@ -85,13 +88,11 @@ func TestBackendLocksSoak(t *testing.T) {
 
 	lockers := []statemgr.Locker{}
 	for i := 0; i < clientCount; i++ {
-		b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+		b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 			"secret_suffix": secretSuffix,
 		}))
 
-		ctx := context.Background()
-
-		s, err := b.StateMgr(ctx, backend.DefaultStateName)
+		s, err := b.StateMgr(backend.DefaultStateName)
 		if err != nil {
 			t.Fatalf("Error creating state manager: %v", err)
 		}
@@ -101,8 +102,6 @@ func TestBackendLocksSoak(t *testing.T) {
 
 	wg := sync.WaitGroup{}
 	for i, l := range lockers {
-		ctx := context.Background()
-
 		wg.Add(1)
 		go func(locker statemgr.Locker, n int) {
 			defer wg.Done()
@@ -112,7 +111,7 @@ func TestBackendLocksSoak(t *testing.T) {
 			li.Who = fmt.Sprintf("client-%v", n)
 
 			for i := 0; i < lockAttempts; i++ {
-				id, err := locker.Lock(ctx, li)
+				id, err := locker.Lock(li)
 				if err != nil {
 					continue
 				}
@@ -120,7 +119,7 @@ func TestBackendLocksSoak(t *testing.T) {
 				// hold onto the lock for a little bit
 				time.Sleep(time.Duration(rand.Intn(10)) * time.Microsecond)
 
-				err = locker.Unlock(ctx, id)
+				err = locker.Unlock(id)
 				if err != nil {
 					t.Errorf("failed to unlock: %v", err)
 				}
@@ -134,7 +133,7 @@ func TestBackendLocksSoak(t *testing.T) {
 func cleanupK8sResources(t *testing.T) {
 	ctx := context.Background()
 	// Get a backend to use the k8s client
-	b1 := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(map[string]interface{}{
+	b1 := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), backend.TestWrapConfig(map[string]interface{}{
 		"secret_suffix": secretSuffix,
 	}))
 

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package addrs
@@ -115,7 +117,7 @@ func TestParseAbsOutputValueStr(t *testing.T) {
 		t.Run(input, func(t *testing.T) {
 			got, diags := ParseAbsOutputValueStr(input)
 			for _, problem := range deep.Equal(got, tc.want) {
-				t.Errorf(problem)
+				t.Errorf("%s", problem)
 			}
 			if len(diags) > 0 {
 				gotErr := diags.Err().Error()

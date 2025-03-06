@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -305,7 +307,7 @@ func NewLegacyResourceAddress(addr addrs.AbsResource) *ResourceAddress {
 	for i, step := range addr.Module {
 		if step.InstanceKey != addrs.NoKey {
 			// At the time of writing this can't happen because we don't
-			// ket generate keyed module instances. This legacy codepath must
+			// yet generate keyed module instances. This legacy codepath must
 			// be removed before we can support "count" and "for_each" for
 			// modules.
 			panic(fmt.Errorf("cannot shim module instance step with key %#v to legacy ResourceAddress.Path", step.InstanceKey))
@@ -343,7 +345,7 @@ func NewLegacyResourceInstanceAddress(addr addrs.AbsResourceInstance) *ResourceA
 	for i, step := range addr.Module {
 		if step.InstanceKey != addrs.NoKey {
 			// At the time of writing this can't happen because we don't
-			// ket generate keyed module instances. This legacy codepath must
+			// yet generate keyed module instances. This legacy codepath must
 			// be removed before we can support "count" and "for_each" for
 			// modules.
 			panic(fmt.Errorf("cannot shim module instance step with key %#v to legacy ResourceAddress.Path", step.InstanceKey))

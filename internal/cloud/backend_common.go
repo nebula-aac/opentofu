@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package cloud
@@ -70,7 +72,7 @@ func (b *Cloud) waitForRun(stopCtx, cancelCtx context.Context, op *backend.Opera
 				b.CLI.Output(b.Colorize().Color(fmt.Sprintf("Waiting for the %s to start...\n", opType)))
 			}
 			if i > 0 && b.CLI != nil {
-				// Insert a blank line to separate the ouputs.
+				// Insert a blank line to separate the outputs.
 				b.CLI.Output("")
 			}
 			return r, nil
@@ -310,7 +312,8 @@ func (b *Cloud) costEstimate(stopCtx, cancelCtx context.Context, op *backend.Ope
 			b.CLI.Output("\n------------------------------------------------------------------------")
 			return nil
 		case tfe.CostEstimateCanceled:
-			return fmt.Errorf(msgPrefix + " canceled.")
+			//nolint:revive,stylecheck // Caller UI relies on this non-idiomatic error string form
+			return fmt.Errorf("%s canceled.", msgPrefix)
 		default:
 			return fmt.Errorf("Unknown or unexpected cost estimate state: %s", ce.Status)
 		}
@@ -387,15 +390,17 @@ func (b *Cloud) checkPolicy(stopCtx, cancelCtx context.Context, op *backend.Oper
 			}
 			continue
 		case tfe.PolicyErrored:
-			return fmt.Errorf(msgPrefix + " errored.")
+			//nolint:revive,stylecheck // Caller UI relies on this non-idiomatic error string form
+			return fmt.Errorf("%s errored.", msgPrefix)
 		case tfe.PolicyHardFailed:
-			return fmt.Errorf(msgPrefix + " hard failed.")
+			//nolint:revive,stylecheck // Caller UI relies on this non-idiomatic error string form
+			return fmt.Errorf("%s hard failed.", msgPrefix)
 		case tfe.PolicySoftFailed:
 			runUrl := fmt.Sprintf(runHeader, b.hostname, b.organization, op.Workspace, r.ID)
 
 			if op.Type == backend.OperationTypePlan || op.UIOut == nil || op.UIIn == nil ||
 				!pc.Actions.IsOverridable || !pc.Permissions.CanOverride {
-				return fmt.Errorf(msgPrefix + " soft failed.\n" + runUrl)
+				return fmt.Errorf("%s soft failed.\n%s", msgPrefix, runUrl)
 			}
 
 			if op.AutoApprove {
@@ -412,9 +417,8 @@ func (b *Cloud) checkPolicy(stopCtx, cancelCtx context.Context, op *backend.Oper
 				}
 				err = b.confirm(stopCtx, op, opts, r, "override")
 				if err != nil && err != errRunOverridden {
-					return fmt.Errorf(
-						fmt.Sprintf("Failed to override: %s\n%s\n", err.Error(), runUrl),
-					)
+					//nolint:revive,stylecheck // Caller UI relies on this non-idiomatic error string form
+					return fmt.Errorf("Failed to override: %s\n%s\n", err.Error(), runUrl)
 				}
 
 				if err != errRunOverridden {
