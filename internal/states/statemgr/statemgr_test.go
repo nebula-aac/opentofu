@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package statemgr
@@ -45,7 +47,7 @@ func TestNewLockInfo(t *testing.T) {
 func TestLockWithContext(t *testing.T) {
 	s := NewFullFake(nil, TestFullInitialState())
 
-	id, err := s.Lock(context.Background(), NewLockInfo())
+	id, err := s.Lock(NewLockInfo())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +76,7 @@ func TestLockWithContext(t *testing.T) {
 	go func() {
 		defer close(unlocked)
 		<-attempted
-		unlockErr = s.Unlock(context.Background(), id)
+		unlockErr = s.Unlock(id)
 	}()
 
 	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)

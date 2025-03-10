@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package consul
@@ -40,11 +42,11 @@ var lostLockErr = errors.New("consul lock was lost")
 
 // RemoteClient is a remote client that stores data in Consul.
 type RemoteClient struct {
-	Client *consulapi.Client
-	Path   string
-	GZip   bool
+	Path string
+	GZip bool
 
-	mu sync.Mutex
+	mu     sync.Mutex
+	Client *consulapi.Client
 	// lockState is true if we're using locks
 	lockState bool
 
@@ -71,7 +73,7 @@ type RemoteClient struct {
 	sessionCancel context.CancelFunc
 }
 
-func (c *RemoteClient) Get(context.Context) (*remote.Payload, error) {
+func (c *RemoteClient) Get() (*remote.Payload, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -123,12 +125,12 @@ func (c *RemoteClient) Get(context.Context) (*remote.Payload, error) {
 	}, nil
 }
 
-func (c *RemoteClient) Put(_ context.Context, data []byte) error {
+func (c *RemoteClient) Put(data []byte) error {
 	// The state can be stored in 4 different ways, based on the payload size
 	// and whether the user enabled gzip:
 	//  - single entry mode with plain JSON: a single JSON is stored at
 	//	  "tfstate/my_project"
-	//  - single entry mode gzip: the JSON payload is first gziped and stored at
+	//  - single entry mode gzip: the JSON payload is first gzipped and stored at
 	//    "tfstate/my_project"
 	//  - chunked mode with plain JSON: the JSON payload is split in pieces and
 	//    stored like so:
@@ -145,10 +147,10 @@ func (c *RemoteClient) Put(_ context.Context, data []byte) error {
 	//       - "tfstate/my_project/tfstate.abcdef1234/0" -> The first chunk
 	//       - "tfstate/my_project/tfstate.abcdef1234/1" -> The next one
 	//       - ...
-	//  - chunked mode with gzip: the same system but we gziped the JSON payload
+	//  - chunked mode with gzip: the same system but we gzipped the JSON payload
 	//    before splitting it in chunks
 	//
-	// When overwritting the current state, we need to clean the old chunks if
+	// When overwriting the current state, we need to clean the old chunks if
 	// we were in chunked mode (no matter whether we need to use chunks for the
 	// new one). To do so based on the 4 possibilities above we look at the
 	// value at "tfstate/my_project" and if it is:
@@ -293,7 +295,7 @@ func (c *RemoteClient) Put(_ context.Context, data []byte) error {
 	return store(payload)
 }
 
-func (c *RemoteClient) Delete(_ context.Context) error {
+func (c *RemoteClient) Delete() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -353,7 +355,7 @@ func (c *RemoteClient) getLockInfo() (*statemgr.LockInfo, error) {
 	return li, nil
 }
 
-func (c *RemoteClient) Lock(ctx context.Context, info *statemgr.LockInfo) (string, error) {
+func (c *RemoteClient) Lock(info *statemgr.LockInfo) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -377,15 +379,15 @@ func (c *RemoteClient) Lock(ctx context.Context, info *statemgr.LockInfo) (strin
 		}
 	}
 
-	return c.lock(ctx)
+	return c.lock()
 }
 
 // the lock implementation.
 // Only to be called while holding Client.mu
-func (c *RemoteClient) lock(ctx context.Context) (string, error) {
+func (c *RemoteClient) lock() (string, error) {
 	// We create a new session here, so it can be canceled when the lock is
 	// lost or unlocked.
-	lockSession, err := c.createSession(ctx)
+	lockSession, err := c.createSession()
 	if err != nil {
 		return "", err
 	}
@@ -460,7 +462,7 @@ func (c *RemoteClient) lock(ctx context.Context) (string, error) {
 	// If we lose the lock to due communication issues with the consul agent,
 	// attempt to immediately reacquire the lock. Put will verify the integrity
 	// of the state by using a CAS operation.
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(context.Background())
 	c.monitorCancel = cancel
 	c.monitorWG.Add(1)
 	go func() {
@@ -477,7 +479,7 @@ func (c *RemoteClient) lock(ctx context.Context) (string, error) {
 				c.sessionCancel()
 
 				c.consulLock = nil
-				_, err := c.lock(ctx)
+				_, err := c.lock()
 				c.mu.Unlock()
 
 				if err != nil {
@@ -516,10 +518,10 @@ func (c *RemoteClient) lock(ctx context.Context) (string, error) {
 // called after a lock is acquired
 var testLockHook func()
 
-func (c *RemoteClient) createSession(ctx context.Context) (string, error) {
+func (c *RemoteClient) createSession() (string, error) {
 	// create the context first. Even if the session creation fails, we assume
 	// that the CancelFunc is always callable.
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(context.Background())
 	c.sessionCancel = cancel
 
 	session := c.Client.Session()
@@ -542,7 +544,7 @@ func (c *RemoteClient) createSession(ctx context.Context) (string, error) {
 	return id, nil
 }
 
-func (c *RemoteClient) Unlock(_ context.Context, id string) error {
+func (c *RemoteClient) Unlock(id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -672,7 +674,7 @@ func (c *RemoteClient) chunkedMode() (bool, string, []string, *consulapi.KVPair,
 		var d map[string]interface{}
 		err = json.Unmarshal(pair.Value, &d)
 		// If there is an error when unmarshaling the payload, the state has
-		// probably been gziped in single entry mode.
+		// probably been gzipped in single entry mode.
 		if err == nil {
 			// If we find the "current-hash" key we were in chunked mode
 			hash, ok := d["current-hash"]

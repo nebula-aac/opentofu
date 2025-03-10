@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package getproviders
@@ -11,14 +13,14 @@ import (
 
 	"github.com/apparentlymart/go-versions/versions"
 	"github.com/apparentlymart/go-versions/versions/constraints"
-
 	"github.com/opentofu/opentofu/internal/addrs"
+	"github.com/opentofu/opentofu/internal/tfdiags"
 )
 
 // Version represents a particular single version of a provider.
 type Version = versions.Version
 
-// UnspecifiedVersion is the zero value of Version, representing the absense
+// UnspecifiedVersion is the zero value of Version, representing the absence
 // of a version number.
 var UnspecifiedVersion Version = versions.Unspecified
 
@@ -48,7 +50,49 @@ type Warnings = []string
 // altogether, which means that it is not required at all.
 type Requirements map[addrs.Provider]VersionConstraints
 
-// Merge takes the requirements in the receiever and the requirements in the
+// ProvidersQualification is storing the implicit/explicit reference qualification of the providers.
+// This is necessary to be able to warn the user when the resources are referencing a provider that
+// is not specifically defined in a required_providers block. When the implicitly referenced
+// provider is tried to be downloaded without a specific provider requirement, it will be tried
+// from the default namespace (hashicorp), failing to download it when it does not exist in the default namespace.
+// Therefore, we want to let the user know what resources are generating this situation.
+type ProvidersQualification struct {
+	Implicit map[addrs.Provider][]ResourceRef
+	Explicit map[addrs.Provider]struct{}
+}
+
+type ResourceRef struct {
+	CfgRes            addrs.ConfigResource
+	Ref               tfdiags.SourceRange
+	ProviderAttribute bool
+}
+
+// AddImplicitProvider saves an addrs.Provider with the place in the configuration where this is generated from.
+func (pq *ProvidersQualification) AddImplicitProvider(provider addrs.Provider, ref ResourceRef) {
+	if pq.Implicit == nil {
+		pq.Implicit = map[addrs.Provider][]ResourceRef{}
+	}
+	// This is avoiding adding the implicit reference of the provider if this is already explicitly configured.
+	// Done this way, because when collecting these qualifications, if there are at least 2 resources (A from root module and B from an imported module),
+	// root module could have no explicit definition but the module of B could have an explicit one. But in case none of the modules is having
+	// an explicit definition, we want to gather all the resources that are implicitly referencing a provider.
+	if _, ok := pq.Explicit[provider]; ok {
+		return
+	}
+	refs := pq.Implicit[provider]
+	refs = append(refs, ref)
+	pq.Implicit[provider] = refs
+}
+
+// AddExplicitProvider saves an addrs.Provider that is specifically configured in a required_providers block.
+func (pq *ProvidersQualification) AddExplicitProvider(provider addrs.Provider) {
+	if pq.Explicit == nil {
+		pq.Explicit = map[addrs.Provider]struct{}{}
+	}
+	pq.Explicit[provider] = struct{}{}
+}
+
+// Merge takes the requirements in the receiver and the requirements in the
 // other given value and produces a new set of requirements that combines
 // all of the requirements of both.
 //
@@ -172,7 +216,7 @@ var CurrentPlatform = Platform{
 // provider package targeting a single platform.
 //
 // Package findproviders does no signature verification or protocol version
-// compatibility checking of its own. A caller receving a PackageMeta must
+// compatibility checking of its own. A caller receiving a PackageMeta must
 // verify that it has a correct signature and supports a protocol version
 // accepted by the current version of OpenTofu before trying to use the
 // described package.
@@ -205,7 +249,7 @@ type PackageMeta struct {
 // PackageMeta in a sorted list of PackageMeta.
 //
 // Sorting preference is given first to the provider address, then to the
-// taget platform, and the to the version number (using semver precedence).
+// target platform, and the to the version number (using semver precedence).
 // Packages that differ only in semver build metadata have no defined
 // precedence and so will always return false.
 //

@@ -1,10 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package webbrowser
 
 import (
-	"github.com/pkg/browser"
+	"github.com/cli/browser"
 )
 
 // NewNativeLauncher creates and returns a Launcher that will attempt to interact

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package addrs
@@ -49,7 +51,7 @@ func ParseInstanceKey(key cty.Value) (InstanceKey, error) {
 	}
 }
 
-// NoKey represents the absense of an InstanceKey, for the single instance
+// NoKey represents the absence of an InstanceKey, for the single instance
 // of a configuration object that does not use "count" or "for_each" at all.
 var NoKey InstanceKey
 

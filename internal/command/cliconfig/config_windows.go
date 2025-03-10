@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 //go:build windows
@@ -38,6 +40,14 @@ func configDir() (string, error) {
 	}
 
 	return filepath.Join(dir, "terraform.d"), nil
+}
+
+func dataDirs() ([]string, error) {
+	dir, err := configDir()
+	if err != nil {
+		return nil, err
+	}
+	return []string{dir}, nil
 }
 
 func homeDir() (string, error) {

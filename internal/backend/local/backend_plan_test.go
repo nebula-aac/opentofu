@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package local
@@ -19,6 +21,7 @@ import (
 	"github.com/opentofu/opentofu/internal/command/views"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
 	"github.com/opentofu/opentofu/internal/depsfile"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/initwd"
 	"github.com/opentofu/opentofu/internal/plans"
 	"github.com/opentofu/opentofu/internal/plans/planfile"
@@ -366,6 +369,7 @@ func TestLocal_planDeposedOnly(t *testing.T) {
 				Provider: addrs.NewDefaultProvider("test"),
 				Module:   addrs.RootModule,
 			},
+			addrs.NoKey,
 		)
 	}))
 	outDir := t.TempDir()
@@ -634,7 +638,7 @@ func TestLocal_planDestroy_withDataSources(t *testing.T) {
 		t.Fatal("plan should not be empty")
 	}
 
-	// Data source should still exist in the the plan file
+	// Data source should still exist in the plan file
 	plan := testReadPlan(t, planPath)
 	if len(plan.Changes.Resources) != 2 {
 		t.Fatalf("Expected exactly 1 resource for destruction, %d given: %q",
@@ -729,6 +733,7 @@ func testOperationPlan(t *testing.T, configDir string) (*backend.Operation, func
 
 	return &backend.Operation{
 		Type:            backend.OperationTypePlan,
+		Encryption:      encryption.Disabled(),
 		ConfigDir:       configDir,
 		ConfigLoader:    configLoader,
 		StateLocker:     clistate.NewNoopLocker(),
@@ -761,6 +766,7 @@ func testPlanState() *states.State {
 			Provider: addrs.NewDefaultProvider("test"),
 			Module:   addrs.RootModule,
 		},
+		addrs.NoKey,
 	)
 	return state
 }
@@ -788,6 +794,7 @@ func testPlanState_withDataSource() *states.State {
 			Provider: addrs.NewDefaultProvider("test"),
 			Module:   addrs.RootModule,
 		},
+		addrs.NoKey,
 	)
 	rootModule.SetResourceInstanceCurrent(
 		addrs.Resource{
@@ -805,6 +812,7 @@ func testPlanState_withDataSource() *states.State {
 			Provider: addrs.NewDefaultProvider("test"),
 			Module:   addrs.RootModule,
 		},
+		addrs.NoKey,
 	)
 	return state
 }
@@ -832,6 +840,7 @@ func testPlanState_tainted() *states.State {
 			Provider: addrs.NewDefaultProvider("test"),
 			Module:   addrs.RootModule,
 		},
+		addrs.NoKey,
 	)
 	return state
 }
@@ -839,11 +848,10 @@ func testPlanState_tainted() *states.State {
 func testReadPlan(t *testing.T, path string) *plans.Plan {
 	t.Helper()
 
-	p, err := planfile.Open(path)
+	p, err := planfile.Open(path, encryption.PlanEncryptionDisabled())
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
-	defer p.Close()
 
 	plan, err := p.ReadPlan()
 	if err != nil {

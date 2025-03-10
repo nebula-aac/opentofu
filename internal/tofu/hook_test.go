@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -152,6 +154,20 @@ func (h *testHook) PostApplyImport(addr addrs.AbsResourceInstance, importing pla
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.Calls = append(h.Calls, &testHookCall{"PostApplyImport", addr.String()})
+	return HookActionContinue, nil
+}
+
+func (h *testHook) PreApplyForget(addr addrs.AbsResourceInstance) (HookAction, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.Calls = append(h.Calls, &testHookCall{"PreApplyForget", addr.String()})
+	return HookActionContinue, nil
+}
+
+func (h *testHook) PostApplyForget(addr addrs.AbsResourceInstance) (HookAction, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.Calls = append(h.Calls, &testHookCall{"PostApplyForget", addr.String()})
 	return HookActionContinue, nil
 }
 

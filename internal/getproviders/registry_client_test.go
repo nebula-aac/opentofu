@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package getproviders
@@ -10,7 +12,6 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -36,11 +37,10 @@ func TestConfigureDiscoveryRetry(t *testing.T) {
 	})
 
 	t.Run("configured retry", func(t *testing.T) {
-		defer func(retryEnv string) {
-			os.Setenv(registryDiscoveryRetryEnvName, retryEnv)
+		defer func() {
 			discoveryRetry = defaultRetry
-		}(os.Getenv(registryDiscoveryRetryEnvName))
-		os.Setenv(registryDiscoveryRetryEnvName, "2")
+		}()
+		t.Setenv(registryDiscoveryRetryEnvName, "2")
 
 		configureDiscoveryRetry()
 		expected := 2
@@ -72,11 +72,10 @@ func TestConfigureRegistryClientTimeout(t *testing.T) {
 	})
 
 	t.Run("configured timeout", func(t *testing.T) {
-		defer func(timeoutEnv string) {
-			os.Setenv(registryClientTimeoutEnvName, timeoutEnv)
+		defer func() {
 			requestTimeout = defaultRequestTimeout
-		}(os.Getenv(registryClientTimeoutEnvName))
-		os.Setenv(registryClientTimeoutEnvName, "20")
+		}()
+		t.Setenv(registryClientTimeoutEnvName, "20")
 
 		configureRequestTimeout()
 		expected := 20 * time.Second

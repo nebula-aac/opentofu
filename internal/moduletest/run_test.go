@@ -1,3 +1,8 @@
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package moduletest
 
 import (
@@ -762,8 +767,9 @@ func TestRun_ValidateExpectedFailures(t *testing.T) {
 					ExpectFailures: traversals,
 				},
 			}
+			expectedFailures, sourceRanges := run.BuildExpectedFailuresAndSourceMaps()
 
-			out := run.ValidateExpectedFailures(tc.Input)
+			out := run.ValidateExpectedFailures(expectedFailures, sourceRanges, tc.Input)
 			ix := 0
 			for ; ix < len(tc.Output); ix++ {
 				expected := tc.Output[ix]

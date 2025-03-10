@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package jsonprovider
@@ -26,6 +28,7 @@ func TestMarshalProvider(t *testing.T) {
 				Provider:          &Schema{},
 				ResourceSchemas:   map[string]*Schema{},
 				DataSourceSchemas: map[string]*Schema{},
+				Functions:         map[string]*Function{},
 			},
 		},
 		{
@@ -144,6 +147,7 @@ func TestMarshalProvider(t *testing.T) {
 						},
 					},
 				},
+				Functions: map[string]*Function{},
 			},
 		},
 	}
@@ -221,5 +225,6 @@ func testProvider() providers.ProviderSchema {
 				},
 			},
 		},
+		Functions: map[string]providers.FunctionSpec{},
 	}
 }
