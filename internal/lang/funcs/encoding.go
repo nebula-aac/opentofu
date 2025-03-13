@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package funcs
@@ -8,6 +10,7 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"unicode/utf8"
@@ -178,6 +181,38 @@ var Base64GzipFunc = function.New(&function.Spec{
 	},
 })
 
+// Base64GunzipFunc constructs a function that Base64 decodes a string and decompresses the result with gunzip.
+var Base64GunzipFunc = function.New(&function.Spec{
+	Params: []function.Parameter{
+		{
+			Name:        "str",
+			Type:        cty.String,
+			AllowMarked: true,
+		},
+	},
+	Type:         function.StaticReturnType(cty.String),
+	RefineResult: refineNotNull,
+	Impl: func(args []cty.Value, retType cty.Type) (cty.Value, error) {
+		str, strMarks := args[0].Unmark()
+		s := str.AsString()
+		sDec, err := base64.StdEncoding.DecodeString(s)
+		if err != nil {
+			return cty.UnknownVal(cty.String), fmt.Errorf("failed to decode base64 data %s", redactIfSensitive(s, strMarks))
+		}
+		sDecBuffer := bytes.NewReader(sDec)
+		gzipReader, err := gzip.NewReader(sDecBuffer)
+		if err != nil {
+			return cty.UnknownVal(cty.String), fmt.Errorf("failed to gunzip bytestream: %w", err)
+		}
+		gunzip, err := io.ReadAll(gzipReader)
+		if err != nil {
+			return cty.UnknownVal(cty.String), fmt.Errorf("failed to read gunzip raw data: %w", err)
+		}
+
+		return cty.StringVal(string(gunzip)).WithMarks(strMarks), nil
+	},
+})
+
 // URLEncodeFunc constructs a function that applies URL encoding to a given string.
 var URLEncodeFunc = function.New(&function.Spec{
 	Params: []function.Parameter{
@@ -190,6 +225,26 @@ var URLEncodeFunc = function.New(&function.Spec{
 	RefineResult: refineNotNull,
 	Impl: func(args []cty.Value, retType cty.Type) (cty.Value, error) {
 		return cty.StringVal(url.QueryEscape(args[0].AsString())), nil
+	},
+})
+
+// URLDecodeFunc constructs a function that applies URL decoding to a given encoded string.
+var URLDecodeFunc = function.New(&function.Spec{
+	Params: []function.Parameter{
+		{
+			Name: "str",
+			Type: cty.String,
+		},
+	},
+	Type:         function.StaticReturnType(cty.String),
+	RefineResult: refineNotNull,
+	Impl: func(args []cty.Value, retType cty.Type) (cty.Value, error) {
+		query, err := url.QueryUnescape(args[0].AsString())
+		if err != nil {
+			return cty.UnknownVal(cty.String), fmt.Errorf("failed to decode URL '%s': %v", query, err)
+		}
+
+		return cty.StringVal(query), nil
 	},
 })
 
@@ -228,6 +283,13 @@ func Base64Gzip(str cty.Value) (cty.Value, error) {
 	return Base64GzipFunc.Call([]cty.Value{str})
 }
 
+// Base64Gunzip decodes a Base64-encoded string and uncompresses the result with gzip.
+//
+// Opentofu uses the "standard" Base64 alphabet as defined in RFC 4648 section 4.
+func Base64Gunzip(str cty.Value) (cty.Value, error) {
+	return Base64GunzipFunc.Call([]cty.Value{str})
+}
+
 // URLEncode applies URL encoding to a given string.
 //
 // This function identifies characters in the given string that would have a
@@ -238,6 +300,16 @@ func Base64Gzip(str cty.Value) (cty.Value, error) {
 // UTF-8 and then percent encoding is applied separately to each UTF-8 byte.
 func URLEncode(str cty.Value) (cty.Value, error) {
 	return URLEncodeFunc.Call([]cty.Value{str})
+}
+
+// URLDecode decodes a URL encoded string.
+//
+// This function decodes the given string that has been encoded.
+//
+// If the given string contains non-ASCII characters, these are first encoded as
+// UTF-8 and then percent decoding is applied separately to each UTF-8 byte.
+func URLDecode(str cty.Value) (cty.Value, error) {
+	return URLDecodeFunc.Call([]cty.Value{str})
 }
 
 // TextEncodeBase64 applies Base64 encoding to a string that was encoded before with a target encoding.

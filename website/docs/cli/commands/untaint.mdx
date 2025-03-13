@@ -15,7 +15,7 @@ a multi-step "create" action, because OpenTofu can't be sure that the object
 was left in a fully-functional state.
 
 You can also manually mark an object as "tainted" using the deprecated command
-[`tofu taint`](/docs/cli/commands/taint), although we no longer recommend that
+[`tofu taint`](../../cli/commands/taint.mdx), although we no longer recommend that
 workflow.
 
 If OpenTofu currently considers a particular object as tainted but you've
@@ -37,8 +37,16 @@ tofu apply -replace="aws_instance.example[0]"
 
 Usage: `tofu untaint [options] address`
 
-The `address` argument is a [resource address](/docs/cli/state/resource-addressing)
+The `address` argument is a [resource address](../../cli/state/resource-addressing.mdx)
 identifying a particular resource instance which is currently tainted.
+
+:::note
+Use of variables in [module sources](../../language/modules/sources.mdx#support-for-variable-and-local-evaluation),
+[backend configuration](../../language/settings/backends/configuration.mdx#variables-and-locals),
+or [encryption block](../../language/state/encryption.mdx#configuration)
+requires [assigning values to root module variables](../../language/values/variables.mdx#assigning-values-to-root-module-variables)
+when running `tofu untaint`.
+:::
 
 This command also accepts the following options:
 
@@ -60,12 +68,28 @@ This command also accepts the following options:
   if you are running OpenTofu in a context where its output will be
   rendered by a system that cannot interpret terminal formatting.
 
-For configurations using the [`cloud` backend](/docs/cli/cloud) or the [`remote` backend](/docs/language/settings/backends/remote)
+- `-var 'NAME=VALUE'` - Sets a value for a single
+  [input variable](../../language/values/variables.mdx) declared in the
+  root module of the configuration. Use this option multiple times to set
+  more than one variable. Refer to
+  [Input Variables on the Command Line](plan.mdx#input-variables-on-the-command-line) for more information.
+
+- `-var-file=FILENAME` - Sets values for potentially many
+  [input variables](../../language/values/variables.mdx) declared in the
+  root module of the configuration, using definitions from a
+  ["tfvars" file](../../language/values/variables.mdx#variable-definitions-tfvars-files).
+  Use this option multiple times to include values from more than one file.
+
+There are several other ways to set values for input variables in the root
+module, aside from the `-var` and `-var-file` options. Refer to
+[Assigning Values to Root Module Variables](../../language/values/variables.mdx#assigning-values-to-root-module-variables) for more information.
+
+For configurations using the [`cloud` backend](../../cli/cloud/index.mdx) or the [`remote` backend](../../language/settings/backends/remote.mdx)
 only, `tofu untaint`
 also accepts the option
-[`-ignore-remote-version`](/docs/cli/cloud/command-line-arguments#ignore-remote-version).
+[`-ignore-remote-version`](../../cli/cloud/command-line-arguments.mdx#ignore-remote-version).
 
 For configurations using
-[the `local` backend](/docs/language/settings/backends/local) only,
+[the `local` backend](../../language/settings/backends/local.mdx) only,
 `tofu untaint` also accepts the legacy options
-[`-state`, `-state-out`, and `-backup`](/docs/language/settings/backends/local#command-line-arguments).
+[`-state`, `-state-out`, and `-backup`](../../language/settings/backends/local.mdx#command-line-arguments).

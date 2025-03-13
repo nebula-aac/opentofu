@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package main
@@ -183,7 +185,7 @@ func realMain() int {
 	}
 	services.SetUserAgent(httpclient.OpenTofuUserAgent(version.String()))
 
-	providerSrc, diags := providerSource(config.ProviderInstallation, services)
+	providerSrc, diags := providerSource(config.ProviderInstallation, services, config.OCICredentialsPolicy)
 	if len(diags) > 0 {
 		Ui.Error("There are some problems with the provider_installation configuration:")
 		for _, diag := range diags {
@@ -299,11 +301,12 @@ func realMain() int {
 	// Rebuild the CLI with any modified args.
 	log.Printf("[INFO] CLI command args: %#v", args)
 	cliRunner = &cli.CLI{
-		Name:       binName,
-		Args:       args,
-		Commands:   commands,
-		HelpFunc:   helpFunc,
-		HelpWriter: os.Stdout,
+		Name:           binName,
+		Args:           args,
+		Commands:       commands,
+		HiddenCommands: getAliasCommandKeys(),
+		HelpFunc:       helpFunc,
+		HelpWriter:     os.Stdout,
 
 		Autocomplete:          true,
 		AutocompleteInstall:   "install-autocomplete",
@@ -500,8 +503,8 @@ func extractChdirOption(args []string) (string, []string, error) {
 	return argValue, newArgs, nil
 }
 
-// Creates the the configuration directory.
-// `configDir` should refer to `~/.terraform.d` or its equivalent
+// Creates the configuration directory.
+// `configDir` should refer to `~/.terraform.d`, `$XDG_CONFIG_HOME/opentofu` or its equivalent
 // on non-UNIX platforms.
 func mkConfigDir(configDir string) error {
 	err := os.Mkdir(configDir, os.ModePerm)

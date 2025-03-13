@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package cliconfig
@@ -60,7 +62,7 @@ func decodeProviderInstallationFromConfig(hclFile *hclast.File) ([]*ProviderInst
 
 	// This is a rather odd hybrid: it's a HCL 2-like decode implemented using
 	// the HCL 1 AST API. That makes it a bit awkward in places, but it allows
-	// us to mimick the strictness of HCL 2 (making a later migration easier)
+	// us to mimic the strictness of HCL 2 (making a later migration easier)
 	// and to support a block structure that the HCL 1 decoder can't represent.
 	for _, block := range root.Items {
 		if block.Keys[0].Token.Value() != "provider_installation" {
@@ -258,7 +260,7 @@ func decodeProviderInstallationFromConfig(hclFile *hclast.File) ([]*ProviderInst
 					devOverrides[addr] = getproviders.PackageLocalDir(dirPath)
 				}
 
-				continue // We won't add anything to pi.Methods for this one
+				continue // We won't add anything to pi.MethodConfigs for this one
 
 			default:
 				diags = diags.Append(tfdiags.Sourceless(

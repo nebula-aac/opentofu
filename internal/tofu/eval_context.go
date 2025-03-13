@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -8,6 +10,7 @@ import (
 	"github.com/opentofu/opentofu/internal/addrs"
 	"github.com/opentofu/opentofu/internal/checks"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/instances"
 	"github.com/opentofu/opentofu/internal/lang"
 	"github.com/opentofu/opentofu/internal/plans"
@@ -41,7 +44,7 @@ type EvalContext interface {
 	// It is an error to initialize the same provider more than once. This
 	// method will panic if the module instance address of the given provider
 	// configuration does not match the Path() of the EvalContext.
-	InitProvider(addr addrs.AbsProviderConfig) (providers.Interface, error)
+	InitProvider(addr addrs.AbsProviderConfig, key addrs.InstanceKey) (providers.Interface, error)
 
 	// Provider gets the provider instance with the given address (already
 	// initialized) or returns nil if the provider isn't initialized.
@@ -50,7 +53,7 @@ type EvalContext interface {
 	// resources in one module are able to use providers from other modules.
 	// InitProvider must've been called on the EvalContext of the module
 	// that owns the given provider before calling this method.
-	Provider(addrs.AbsProviderConfig) providers.Interface
+	Provider(addrs.AbsProviderConfig, addrs.InstanceKey) providers.Interface
 
 	// ProviderSchema retrieves the schema for a particular provider, which
 	// must have already been initialized with InitProvider.
@@ -72,7 +75,7 @@ type EvalContext interface {
 	//
 	// This method will panic if the module instance address of the given
 	// provider configuration does not match the Path() of the EvalContext.
-	ConfigureProvider(addrs.AbsProviderConfig, cty.Value) tfdiags.Diagnostics
+	ConfigureProvider(addrs.AbsProviderConfig, addrs.InstanceKey, cty.Value) tfdiags.Diagnostics
 
 	// ProviderInput and SetProviderInput are used to configure providers
 	// from user input.
@@ -201,7 +204,18 @@ type EvalContext interface {
 	// objects accessible through it.
 	MoveResults() refactoring.MoveResults
 
+	// ImportResolver returns a helper object for tracking the resolution of
+	// imports, after evaluating the dynamic address and ID of the import targets
+	//
+	// This data is created during the graph walk, as import target addresses are being resolved
+	// Its primary use is for validation at the end of a plan - To make sure all imports have been satisfied
+	// and have a configuration
+	ImportResolver() *ImportResolver
+
 	// WithPath returns a copy of the context with the internal path set to the
 	// path argument.
 	WithPath(path addrs.ModuleInstance) EvalContext
+
+	// Returns the currently configured encryption setup
+	GetEncryption() encryption.Encryption
 }

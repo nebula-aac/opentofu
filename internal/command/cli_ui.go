@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -10,7 +12,7 @@ import (
 	"github.com/mitchellh/colorstring"
 )
 
-// ColoredUi is a Ui implementation that colors its output according
+// ColorizeUi is a Ui implementation that colors its output according
 // to the given color schemes for the given type of output.
 type ColorizeUi struct {
 	Colorize    *colorstring.Colorize

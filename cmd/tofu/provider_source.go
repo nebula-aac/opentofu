@@ -1,9 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/url"
@@ -15,15 +18,25 @@ import (
 
 	"github.com/opentofu/opentofu/internal/addrs"
 	"github.com/opentofu/opentofu/internal/command/cliconfig"
+	"github.com/opentofu/opentofu/internal/command/cliconfig/ociauthconfig"
 	"github.com/opentofu/opentofu/internal/getproviders"
 	"github.com/opentofu/opentofu/internal/tfdiags"
 )
+
+// ociCredsPolicyBuilder is the type of a callback function that the [providerSource]
+// functions will use if any of the configured provider installation methods
+// need to interact with OCI Distribution registries.
+//
+// We represent this indirectly as a callback function so that we can skip doing
+// this work in the common case where we won't need to interact with OCI registries
+// at all.
+type ociCredsPolicyBuilder func(context.Context) (ociauthconfig.CredentialsConfigs, error)
 
 // providerSource constructs a provider source based on a combination of the
 // CLI configuration and some default search locations. This will be the
 // provider source used for provider installation in the "tofu init"
 // command, unless overridden by the special -plugin-dir option.
-func providerSource(configs []*cliconfig.ProviderInstallation, services *disco.Disco) (getproviders.Source, tfdiags.Diagnostics) {
+func providerSource(configs []*cliconfig.ProviderInstallation, services *disco.Disco, getOCICredsPolicy ociCredsPolicyBuilder) (getproviders.Source, tfdiags.Diagnostics) {
 	if len(configs) == 0 {
 		// If there's no explicit installation configuration then we'll build
 		// up an implicit one with direct registry installation along with
@@ -35,16 +48,16 @@ func providerSource(configs []*cliconfig.ProviderInstallation, services *disco.D
 	// the validation logic in the cliconfig package. Therefore we'll just
 	// ignore any additional configurations in here.
 	config := configs[0]
-	return explicitProviderSource(config, services)
+	return explicitProviderSource(config, services, getOCICredsPolicy)
 }
 
-func explicitProviderSource(config *cliconfig.ProviderInstallation, services *disco.Disco) (getproviders.Source, tfdiags.Diagnostics) {
+func explicitProviderSource(config *cliconfig.ProviderInstallation, services *disco.Disco, getOCICredsPolicy ociCredsPolicyBuilder) (getproviders.Source, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 	var searchRules []getproviders.MultiSourceSelector
 
 	log.Printf("[DEBUG] Explicit provider installation configuration is set")
 	for _, methodConfig := range config.Methods {
-		source, moreDiags := providerSourceForCLIConfigLocation(methodConfig.Location, services)
+		source, moreDiags := providerSourceForCLIConfigLocation(methodConfig.Location, services, getOCICredsPolicy)
 		diags = diags.Append(moreDiags)
 		if moreDiags.HasErrors() {
 			continue
@@ -96,7 +109,8 @@ func implicitProviderSource(services *disco.Disco) getproviders.Source {
 	//   way to include them in bundles uploaded to Terraform Cloud, where
 	//   there has historically otherwise been no way to use custom providers.
 	// - The "plugins" subdirectory of the CLI config search directory.
-	//   (thats ~/.terraform.d/plugins on Unix systems, equivalents elsewhere)
+	//   (that's ~/.terraform.d/plugins or $XDG_DATA_HOME/opentofu/plugins
+	//   on Unix systems, equivalents elsewhere)
 	// - The "plugins" subdirectory of any platform-specific search paths,
 	//   following e.g. the XDG base directory specification on Unix systems,
 	//   Apple's guidelines on OS X, and "known folders" on Windows.
@@ -144,9 +158,11 @@ func implicitProviderSource(services *disco.Disco) getproviders.Source {
 	}
 
 	addLocalDir("terraform.d/plugins") // our "vendor" directory
-	cliConfigDir, err := cliconfig.ConfigDir()
+	cliDataDirs, err := cliconfig.DataDirs()
 	if err == nil {
-		addLocalDir(filepath.Join(cliConfigDir, "plugins"))
+		for _, cliDataDir := range cliDataDirs {
+			addLocalDir(filepath.Join(cliDataDir, "plugins"))
+		}
 	}
 
 	// This "userdirs" library implements an appropriate user-specific and
@@ -187,7 +203,7 @@ func implicitProviderSource(services *disco.Disco) getproviders.Source {
 	return getproviders.MultiSource(searchRules)
 }
 
-func providerSourceForCLIConfigLocation(loc cliconfig.ProviderInstallationLocation, services *disco.Disco) (getproviders.Source, tfdiags.Diagnostics) {
+func providerSourceForCLIConfigLocation(loc cliconfig.ProviderInstallationLocation, services *disco.Disco, _ ociCredsPolicyBuilder) (getproviders.Source, tfdiags.Diagnostics) {
 	if loc == cliconfig.ProviderInstallationDirect {
 		return getproviders.NewMemoizeSource(
 			getproviders.NewRegistrySource(services),
@@ -220,6 +236,12 @@ func providerSourceForCLIConfigLocation(loc cliconfig.ProviderInstallationLocati
 			return nil, diags
 		}
 		return getproviders.NewHTTPMirrorSource(url, services.CredentialsSource()), nil
+
+	// TODO: Once we implement an OCI-Distribution-based mirror source in a
+	// future commit, we'll use the ociCredsPolicyBuilder callback as part of
+	// initializing it so that it can find any credentials it needs to do its work.
+	// For now this is just a stub to illustrate where future work should
+	// continue, to help split this OCI integration work across multiple changes.
 
 	default:
 		// We should not get here because the set of cases above should

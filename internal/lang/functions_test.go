@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package lang
@@ -7,15 +9,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	homedir "github.com/mitchellh/go-homedir"
+	"github.com/zclconf/go-cty/cty"
+
 	"github.com/opentofu/opentofu/internal/experiments"
 	"github.com/opentofu/opentofu/internal/lang/marks"
-	"github.com/zclconf/go-cty/cty"
 )
 
 // TestFunctions tests that functions are callable through the functionality
@@ -108,6 +112,13 @@ func TestFunctions(t *testing.T) {
 			},
 		},
 
+		"base64gunzip": {
+			{
+				`base64gunzip("H4sIAAAAAAAA/ypJLS4BAAAA//8BAAD//wx+f9gEAAAA")`,
+				cty.StringVal("test"),
+			},
+		},
+
 		"base64sha256": {
 			{
 				`base64sha256("test")`,
@@ -178,6 +189,13 @@ func TestFunctions(t *testing.T) {
 						cty.StringVal("c"),
 					}),
 				}),
+			},
+		},
+
+		"cidrcontains": {
+			{
+				`cidrcontains("192.168.1.0/24", "192.168.1.1")`,
+				cty.True,
 			},
 		},
 
@@ -509,6 +527,17 @@ func TestFunctions(t *testing.T) {
 			{
 				`index(["a", "b", "c"], "a")`,
 				cty.NumberIntVal(0),
+			},
+		},
+
+		"issensitive": {
+			{
+				`issensitive(1)`,
+				cty.False,
+			},
+			{
+				`issensitive(sensitive(1))`,
+				cty.True,
 			},
 		},
 
@@ -962,6 +991,13 @@ func TestFunctions(t *testing.T) {
 			},
 		},
 
+		"templatestring": {
+			{
+				`templatestring("Hello, $${name}!", {name = "Jodie"})`,
+				cty.StringVal("Hello, Jodie!"),
+			},
+		},
+
 		"timeadd": {
 			{
 				`timeadd("2017-11-22T00:00:00Z", "1s")`,
@@ -1108,6 +1144,12 @@ func TestFunctions(t *testing.T) {
 				cty.StringVal("foo%3Abar%40localhost%3Ffoo%3Dbar%26bar%3Dbaz"),
 			},
 		},
+		"urldecode": {
+			{
+				`urldecode("foo%3Abar%40localhost%3Ffoo%3Dbar%26bar%3Dbaz")`,
+				cty.StringVal("foo:bar@localhost?foo=bar&bar=baz"),
+			},
+		},
 
 		"uuidv5": {
 			{
@@ -1205,9 +1247,10 @@ func TestFunctions(t *testing.T) {
 		// suitable type.
 		for _, impureFunc := range impureFunctions {
 			delete(allFunctions, impureFunc)
+			delete(allFunctions, CoreNamespace+impureFunc)
 		}
 		for f := range scope.Functions() {
-			if _, ok := tests[f]; !ok {
+			if _, ok := tests[strings.TrimPrefix(f, CoreNamespace)]; !ok {
 				t.Errorf("Missing test for function %s\n", f)
 			}
 		}

@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -13,8 +14,6 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
-	"github.com/zclconf/go-cty/cty"
-
 	"github.com/opentofu/opentofu/internal/addrs"
 	"github.com/opentofu/opentofu/internal/backend"
 	"github.com/opentofu/opentofu/internal/command/arguments"
@@ -31,6 +30,8 @@ type ImportCommand struct {
 }
 
 func (c *ImportCommand) Run(args []string) int {
+	ctx := c.CommandContext()
+
 	// Get the pwd since its our default -config flag value
 	pwd, err := os.Getwd()
 	if err != nil {
@@ -111,6 +112,14 @@ func (c *ImportCommand) Run(args []string) int {
 		return 1
 	}
 
+	// Load the encryption configuration
+	enc, encDiags := c.EncryptionFromPath(configPath)
+	diags = diags.Append(encDiags)
+	if encDiags.HasErrors() {
+		c.showDiagnostics(diags)
+		return 1
+	}
+
 	// Verify that the given address points to something that exists in config.
 	// This is to reduce the risk that a typo in the resource address will
 	// import something that OpenTofu will want to immediately destroy on
@@ -168,7 +177,7 @@ func (c *ImportCommand) Run(args []string) int {
 	// Load the backend
 	b, backendDiags := c.Backend(&BackendOpts{
 		Config: config.Module.Backend,
-	})
+	}, enc.State())
 	diags = diags.Append(backendDiags)
 	if backendDiags.HasErrors() {
 		c.showDiagnostics(diags)
@@ -187,7 +196,7 @@ func (c *ImportCommand) Run(args []string) int {
 	}
 
 	// Build the operation
-	opReq := c.Operation(b, arguments.ViewHuman)
+	opReq := c.Operation(b, arguments.ViewHuman, enc)
 	opReq.ConfigDir = configPath
 	opReq.ConfigLoader, err = c.initConfigLoader()
 	if err != nil {
@@ -197,9 +206,11 @@ func (c *ImportCommand) Run(args []string) int {
 	}
 	opReq.Hooks = []tofu.Hook{c.uiHook()}
 	{
-		var moreDiags tfdiags.Diagnostics
+		// Setup required variables/call for operation (usually done in Meta.RunOperation)
+		var moreDiags, callDiags tfdiags.Diagnostics
 		opReq.Variables, moreDiags = c.collectVariableValues()
-		diags = diags.Append(moreDiags)
+		opReq.RootCall, callDiags = c.rootModuleCall(opReq.ConfigDir)
+		diags = diags.Append(moreDiags).Append(callDiags)
 		if moreDiags.HasErrors() {
 			c.showDiagnostics(diags)
 			return 1
@@ -216,7 +227,7 @@ func (c *ImportCommand) Run(args []string) int {
 	}
 
 	// Get the context
-	lr, state, ctxDiags := local.LocalRun(opReq)
+	lr, state, ctxDiags := local.LocalRun(ctx, opReq)
 	diags = diags.Append(ctxDiags)
 	if ctxDiags.HasErrors() {
 		c.showDiagnostics(diags)
@@ -234,14 +245,13 @@ func (c *ImportCommand) Run(args []string) int {
 	// Perform the import. Note that as you can see it is possible for this
 	// API to import more than one resource at once. For now, we only allow
 	// one while we stabilize this feature.
-	newState, importDiags := lr.Core.Import(lr.Config, lr.InputState, &tofu.ImportOpts{
+	newState, importDiags := lr.Core.Import(ctx, lr.Config, lr.InputState, &tofu.ImportOpts{
 		Targets: []*tofu.ImportTarget{
 			{
-				Addr: addr,
-
-				// In the import block, the ID can be an arbitrary hcl.Expression,
-				// but here it's always interpreted as a literal string.
-				ID: hcl.StaticExpr(cty.StringVal(args[1]), configs.SynthBody("import", nil).MissingItemRange()),
+				CommandLineImportTarget: &tofu.CommandLineImportTarget{
+					Addr: addr,
+					ID:   args[1],
+				},
 			},
 		},
 
@@ -270,10 +280,7 @@ func (c *ImportCommand) Run(args []string) int {
 		c.Ui.Error(fmt.Sprintf("Error writing state file: %s", err))
 		return 1
 	}
-
-	ctx := context.TODO()
-
-	if err := state.PersistState(ctx, schemas); err != nil {
+	if err := state.PersistState(schemas); err != nil {
 		c.Ui.Error(fmt.Sprintf("Error writing state file: %s", err))
 		return 1
 	}
@@ -310,6 +317,18 @@ Usage: tofu [global options] import [options] ADDR ID
   the resource being imported.
 
 Options:
+
+  -compact-warnings       If OpenTofu produces any warnings that are not
+                          accompanied by errors, show them in a more compact
+                          form that includes only the summary messages.
+
+  -consolidate-warnings   If OpenTofu produces any warnings, no consolidation
+                          will be performed. All locations, for all warnings
+                          will be listed. Enabled by default.
+
+  -consolidate-errors     If OpenTofu produces any errors, no consolidation
+                          will be performed. All locations, for all errors
+                          will be listed. Disabled by default
 
   -config=path            Path to a directory of OpenTofu configuration files
                           to use to configure the provider. Defaults to pwd.

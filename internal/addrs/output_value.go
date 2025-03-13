@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package addrs
@@ -17,7 +19,7 @@ import (
 //
 // This is related to but separate from ModuleCallOutput, which represents
 // a module output from the perspective of its parent module. Outputs are
-// referencable from the testing scope, in general tofu operation users
+// referenceable from the testing scope, in general tofu operation users
 // will be referencing ModuleCallOutput.
 type OutputValue struct {
 	referenceable

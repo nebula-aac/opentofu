@@ -7,7 +7,7 @@ description: >-
 # JSON Configuration Syntax
 
 Most OpenTofu configurations are written in
-[the native OpenTofu language syntax](/docs/language/syntax/configuration), which is designed to be
+[the native OpenTofu language syntax](../../language/syntax/configuration.mdx), which is designed to be
 relatively easy for humans to read and update.
 
 OpenTofu also supports an alternative syntax that is JSON-compatible. This
@@ -20,8 +20,8 @@ be expressed in native syntax can also be expressed in JSON syntax, but some
 constructs are more complex to represent in JSON due to limitations of the
 JSON grammar.
 
-OpenTofu expects native syntax for files named with a `.tf` suffix, and
-JSON syntax for files named with a `.tf.json` suffix.
+OpenTofu expects native syntax for files named with a `.tf` or `.tofu` suffix,
+and JSON syntax for files named with a `.tf.json` or `.tofu.json` suffix.
 
 The low-level JSON syntax, just as with the native syntax, is defined in terms
 of a specification called _HCL_. It is not necessary to know all of the details
@@ -29,6 +29,19 @@ of HCL syntax or its JSON mapping in order to use OpenTofu, and so this page
 summarizes the most important differences between native and JSON syntax.
 If you are interested, you can find a full definition of HCL's JSON syntax
 in [its specification](https://github.com/hashicorp/hcl/blob/main/json/spec.md).
+
+### Extension Precedence
+
+When both `.tf.json` and `.tofu.json` files with the same base name are present
+in a directory, OpenTofu will prioritize the `.tofu.json` file and ignore the
+`.tf.json` file. For example:
+
+- If both `foo.tf.json` and `foo.tofu.json` exist in the same directory,
+OpenTofu will only load `foo.tofu.json` and ignore `foo.tf.json`.
+
+This ensures that `.tofu.json` files always take precedence over `.tf.json`
+files when both are available. This scenario can be useful for module authors
+who want their modules to support both OpenTofu and Terraform.
 
 ## JSON File Structure
 
@@ -91,7 +104,7 @@ different (see the [block-type-specific exceptions](#block-type-specific-excepti
   correspond either to argument names or to nested block type names.
 
 * Where a property corresponds to an argument that accepts
-  [arbitrary expressions](/docs/language/expressions) in the native syntax, the
+  [arbitrary expressions](../../language/expressions/index.mdx) in the native syntax, the
   property value is mapped to an expression as described under
   [_Expression Mapping_](#expression-mapping) below. For arguments that
   do _not_ accept arbitrary expressions, the interpretation of the property
@@ -108,19 +121,17 @@ different (see the [block-type-specific exceptions](#block-type-specific-excepti
 ## Expression Mapping
 
 Since JSON grammar is not able to represent all of the OpenTofu language
-[expression syntax](/docs/language/expressions), JSON values interpreted as expressions
+[expression syntax](../../language/expressions/index.mdx), JSON values interpreted as expressions
 are mapped as follows:
 
-| JSON    | OpenTofu Language Interpretation                                                                             |
-| ------- | ------------------------------------------------------------------------------------------------------------- |
-| Boolean | A literal `bool` value.                                                                                       |
-| Number  | A literal `number` value.                                                                                     |
-| String  | Parsed as a [string template][] and then evaluated as described below.                                        |
-| Object  | Each property value is mapped per this table, producing an `object(...)` value with suitable attribute types. |
-| Array   | Each element is mapped per this table, producing a `tuple(...)` value with suitable element types.            |
-| Null    | A literal `null`.                                                                                             |
-
-[string template]: /docs/language/expressions/strings#string-templates
+| JSON    | OpenTofu Language Interpretation                                                                                  |
+|---------|-------------------------------------------------------------------------------------------------------------------|
+| Boolean | A literal `bool` value.                                                                                           |
+| Number  | A literal `number` value.                                                                                         |
+| String  | Parsed as a [string template](../expressions/strings.mdx#string-templates) and then evaluated as described below. |
+| Object  | Each property value is mapped per this table, producing an `object(...)` value with suitable attribute types.     |
+| Array   | Each element is mapped per this table, producing a `tuple(...)` value with suitable element types.                |
+| Null    | A literal `null`.                                                                                                 |
 
 When a JSON string is encountered in a location where arbitrary expressions are
 expected, its value is first parsed as a [string template][]

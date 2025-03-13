@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package jsonconfig
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -53,11 +54,11 @@ func marshalExpression(ex hcl.Expression) expression {
 		var varString []string
 		for _, ref := range refs {
 			// We work backwards here, starting with the full reference +
-			// reamining traversal, and then unwrapping the remaining traversals
-			// into parts until we end up at the smallest referencable address.
+			// remaining traversal, and then unwrapping the remaining traversals
+			// into parts until we end up at the smallest referenceable address.
 			remains := ref.Remaining
 			for len(remains) > 0 {
-				varString = append(varString, fmt.Sprintf("%s%s", ref.Subject, traversalStr(remains)))
+				varString = append(varString, fmt.Sprintf("%s%s", ref.Subject, addrs.TraversalStr(remains)))
 				remains = remains[:(len(remains) - 1)]
 			}
 			varString = append(varString, ref.Subject.String())
@@ -107,7 +108,7 @@ func marshalExpressions(body hcl.Body, schema *configschema.Block) expressions {
 	// Use the low-level schema with the body to decode one level We'll just
 	// ignore any additional content that's not covered by the schema, which
 	// will effectively ignore "dynamic" blocks, and may also ignore other
-	// unknown stuff but anything else would get flagged by Terraform as an
+	// unknown stuff but anything else would get flagged by OpenTofu as an
 	// error anyway, and so we wouldn't end up in here.
 	content, _, _ := body.PartialContent(lowSchema)
 	if content == nil {
@@ -154,32 +155,4 @@ func marshalExpressions(body hcl.Body, schema *configschema.Block) expressions {
 	}
 
 	return ret
-}
-
-// traversalStr produces a representation of an HCL traversal that is compact,
-// resembles HCL native syntax, and is suitable for display in the UI.
-//
-// This was copied (and simplified) from internal/command/views/json/diagnostic.go.
-func traversalStr(traversal hcl.Traversal) string {
-	var buf bytes.Buffer
-	for _, step := range traversal {
-		switch tStep := step.(type) {
-		case hcl.TraverseRoot:
-			buf.WriteString(tStep.Name)
-		case hcl.TraverseAttr:
-			buf.WriteByte('.')
-			buf.WriteString(tStep.Name)
-		case hcl.TraverseIndex:
-			buf.WriteByte('[')
-			switch tStep.Key.Type() {
-			case cty.String:
-				buf.WriteString(fmt.Sprintf("%q", tStep.Key.AsString()))
-			case cty.Number:
-				bf := tStep.Key.AsBigFloat()
-				buf.WriteString(bf.Text('g', 10))
-			}
-			buf.WriteByte(']')
-		}
-	}
-	return buf.String()
 }

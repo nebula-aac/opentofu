@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -89,6 +91,10 @@ type Hook interface {
 	// using the configuration-driven import workflow.
 	PreApplyImport(addr addrs.AbsResourceInstance, importing plans.ImportingSrc) (HookAction, error)
 	PostApplyImport(addr addrs.AbsResourceInstance, importing plans.ImportingSrc) (HookAction, error)
+
+	// PreApplyForget and PostApplyForget are called during an apply for each forgotten resource.
+	PreApplyForget(addr addrs.AbsResourceInstance) (HookAction, error)
+	PostApplyForget(addr addrs.AbsResourceInstance) (HookAction, error)
 
 	// Stopping is called if an external signal requests that OpenTofu
 	// gracefully abort an operation in progress.
@@ -183,6 +189,14 @@ func (h *NilHook) PreApplyImport(addr addrs.AbsResourceInstance, importing plans
 }
 
 func (h *NilHook) PostApplyImport(addr addrs.AbsResourceInstance, importing plans.ImportingSrc) (HookAction, error) {
+	return HookActionContinue, nil
+}
+
+func (h *NilHook) PreApplyForget(_ addrs.AbsResourceInstance) (HookAction, error) {
+	return HookActionContinue, nil
+}
+
+func (h *NilHook) PostApplyForget(_ addrs.AbsResourceInstance) (HookAction, error) {
 	return HookActionContinue, nil
 }
 

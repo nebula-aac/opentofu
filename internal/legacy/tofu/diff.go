@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -87,7 +89,7 @@ func (d *Diff) AddModule(path addrs.ModuleInstance) *ModuleDiff {
 	legacyPath := make([]string, len(path))
 	for i, step := range path {
 		if step.InstanceKey != addrs.NoKey {
-			// FIXME: Once the rest of Terraform is ready to use count and
+			// FIXME: Once the rest of OpenTofu is ready to use count and
 			// for_each, remove all of this and just write the addrs.ModuleInstance
 			// value itself into the ModuleState.
 			panic("diff cannot represent modules with count or for_each keys")
@@ -403,7 +405,7 @@ type InstanceDiff struct {
 	DestroyTainted bool
 
 	// Meta is a simple K/V map that is stored in a diff and persisted to
-	// plans but otherwise is completely ignored by Terraform core. It is
+	// plans but otherwise is completely ignored by OpenTofu core. It is
 	// meant to be used for additional data a resource may want to pass through.
 	// The value here must only contain Go primitives and collections.
 	Meta map[string]interface{}
@@ -539,7 +541,7 @@ func (d *InstanceDiff) applyBlockDiff(path []string, attrs map[string]string, sc
 
 		// check each set candidate to see if it was removed.
 		// we need to do this, because when entire sets are removed, they may
-		// have the wrong key, and ony show diffs going to ""
+		// have the wrong key, and only show diffs going to ""
 		if block.Nesting == configschema.NestingSet {
 			for k := range candidateKeys {
 				indexPrefix := strings.Join(append(path, n, k), ".") + "."
@@ -715,7 +717,7 @@ func (d *InstanceDiff) applySingleAttrDiff(path []string, attrs map[string]strin
 		return result, nil
 	}
 
-	// check for missmatched diff values
+	// check for mismatched diff values
 	if exists &&
 		old != diff.Old &&
 		old != hcl2shim.UnknownVariableValue &&
@@ -1331,7 +1333,7 @@ func (d *InstanceDiff) Same(d2 *InstanceDiff) (bool, string) {
 				continue
 			}
 
-			// If the last diff was a computed value then the absense of
+			// If the last diff was a computed value then the absence of
 			// that value is allowed since it may mean the value ended up
 			// being the same.
 			if diffOld.NewComputed {

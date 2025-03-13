@@ -1,0 +1,66 @@
+---
+sidebar_position: 2
+sidebar_label: What's new in version 1.10?
+description: |-
+  Learn all about the new features in OpenTofu 1.10.
+---
+
+# What's new in OpenTofu 1.10?
+
+This page will run you through the most important changes in OpenTofu 1.10:
+
+- [New features](#new-features)
+  - [New built-in functions](#new-built-in-functions)
+  - [Moved for different resource types](#moved-for-different-resource-types)
+- [Improvements to existing features](#improvements-to-existing-features)
+  - [External programs as encryption key providers (experimental)](#external-programs-as-encryption-key-providers-experimental)
+  - [Smaller improvements](#smaller-improvements)
+- [Deprecations](#deprecations)
+  - [Using `ghcr.io/opentofu/opentofu` as a base image](#using-ghcrioopentofuopentofu-as-a-base-image)
+- [Bugfixes](#bugfixes)
+
+## New features
+
+### New built-in functions
+
+New builtin provider functions added ([#2306](https://github.com/opentofu/opentofu/pull/2306)) :
+
+- `provider::terraform::decode_tfvars` - Decode a TFVars file content into an object.
+- `provider::terraform::encode_tfvars` - Encode an object into a string with the same format as a TFVars file.
+- `provider::terraform::encode_expr` - Encode an arbitrary expression into a string with valid OpenTofu syntax.
+
+### Moved for different resource types
+
+- `moved` block can now be used to migrate between different types of resources ([docs](../language/modules/develop/refactoring.mdx#changing-a-resource-type)).
+- Builtin provider now supports migration from `null_resource` to `terraform_data` resource.
+
+## Improvements to existing features
+
+### External programs as encryption key providers (experimental)
+
+State encryption now supports using external programs as key providers. Additionally, the PBKDF2 key provider now supports chaining via the `chain` parameter. For details, [see the related documentation](../language/state/encryption.mdx#external-experimental)
+
+This functionality is experimental and may be changed in future OpenTofu versions.
+
+### Smaller improvements
+
+* OpenTofu will now recommend using `-exclude` instead of `-target`, when possible, in the error messages about unknown values in `count` and `for_each` arguments, thereby providing a more definitive workaround. ([#2154](https://github.com/opentofu/opentofu/pull/2154))
+
+## Deprecations
+
+### Using `ghcr.io/opentofu/opentofu` as a base image
+
+Using the `ghcr.io/opentofu/opentofu` image as a base image for custom images is deprecated and doesn't work as of OpenTofu 1.10. The reason behind this change is security: while we regularly update OpenTofu itself when security-relevant updates arise, providing a base image would require an update roughly once a week, which we are currently not equipped to do.
+
+However, we have added instructions on building your own base image in the [containerized installation instructions](./install/docker.mdx#building-your-own-image).
+
+## Bugfixes
+
+:::warning
+OpenTofu 1.10 changed how workspace creation locking works. It is unsafe to
+use `pg` backend with multiple OpenTofu versions (under 1.10) in parallel if those
+are sharing the same underlying database.
+:::
+
+- Fixed an issue where an invalid provider name in the `provider_meta` block would crash OpenTofu rather than report an error ([#2347](https://github.com/opentofu/opentofu/pull/2347))
+- `pg` backend doesn't fail on workspace creation for parallel runs, when the database is shared across multiple projects. ([#2411](https://github.com/opentofu/opentofu/pull/2411))

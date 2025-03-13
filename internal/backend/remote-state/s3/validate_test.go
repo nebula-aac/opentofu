@@ -1,3 +1,8 @@
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package s3
 
 import (
@@ -47,12 +52,12 @@ func TestValidateKMSKey(t *testing.T) {
 			},
 		},
 		"non-kms arn": {
-			in: "arn:aws:lamda:foo:bar:key/xyz",
+			in: "arn:aws:lambda:foo:bar:key/xyz",
 			expected: tfdiags.Diagnostics{
 				tfdiags.AttributeValue(
 					tfdiags.Error,
 					"Invalid KMS Key ARN",
-					`Value must be a valid KMS Key ARN, got "arn:aws:lamda:foo:bar:key/xyz"`,
+					`Value must be a valid KMS Key ARN, got "arn:aws:lambda:foo:bar:key/xyz"`,
 					path,
 				),
 			},

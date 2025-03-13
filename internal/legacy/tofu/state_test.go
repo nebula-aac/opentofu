@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -1327,7 +1329,7 @@ func TestStateHasResources(t *testing.T) {
 	}
 }
 
-func TestStateFromFutureTerraform(t *testing.T) {
+func TestStateFromFutureTofu(t *testing.T) {
 	cases := []struct {
 		In     string
 		Result bool
@@ -1348,7 +1350,7 @@ func TestStateFromFutureTerraform(t *testing.T) {
 
 	for _, tc := range cases {
 		state := &State{TFVersion: tc.In}
-		actual := state.FromFutureTerraform()
+		actual := state.FromFutureTofu()
 		if actual != tc.Result {
 			t.Fatalf("%s: bad: %v", tc.In, actual)
 		}

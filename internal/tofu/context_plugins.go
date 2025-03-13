@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -23,11 +25,10 @@ type contextPlugins struct {
 }
 
 func newContextPlugins(providerFactories map[addrs.Provider]providers.Factory, provisionerFactories map[string]provisioners.Factory) *contextPlugins {
-	ret := &contextPlugins{
+	return &contextPlugins{
 		providerFactories:    providerFactories,
 		provisionerFactories: provisionerFactories,
 	}
-	return ret
 }
 
 func (cp *contextPlugins) HasProvider(addr addrs.Provider) bool {
@@ -66,18 +67,23 @@ func (cp *contextPlugins) NewProvisionerInstance(typ string) (provisioners.Inter
 // to repeatedly call this method with the same address if various different
 // parts of OpenTofu all need the same schema information.
 func (cp *contextPlugins) ProviderSchema(addr addrs.Provider) (providers.ProviderSchema, error) {
-	log.Printf("[TRACE] tofu.contextPlugins: Initializing provider %q to read its schema", addr)
-
 	// Check the global schema cache first.
 	// This cache is only written by the provider client, and transparently
 	// used by GetProviderSchema, but we check it here because at this point we
 	// may be able to avoid spinning up the provider instance at all.
+	//
+	// It's worth noting that ServerCapabilities.GetProviderSchemaOptional is ignored here.
+	// That is because we're checking *prior* to the provider's instantiation.
+	// GetProviderSchemaOptional only says that *if we instantiate a provider*,
+	// then we need to run the get schema call at least once.
+	// BUG This SHORT CIRCUITS the logic below and is not the only code which inserts provider schemas into the cache!!
 	schemas, ok := providers.SchemaCache.Get(addr)
 	if ok {
 		log.Printf("[TRACE] tofu.contextPlugins: Serving provider %q schema from global schema cache", addr)
 		return schemas, nil
 	}
 
+	log.Printf("[TRACE] tofu.contextPlugins: Initializing provider %q to read its schema", addr)
 	provider, err := cp.NewProviderInstance(addr)
 	if err != nil {
 		return schemas, fmt.Errorf("failed to instantiate provider %q to obtain schema: %w", addr, err)

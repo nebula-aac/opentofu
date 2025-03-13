@@ -1,9 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package structured
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 
@@ -264,8 +267,10 @@ func unmarshalGeneric(raw json.RawMessage) interface{} {
 		return nil
 	}
 
+	decoder := json.NewDecoder(bytes.NewBuffer(raw))
+	decoder.UseNumber()
 	var out interface{}
-	if err := json.Unmarshal(raw, &out); err != nil {
+	if err := decoder.Decode(&out); err != nil {
 		panic("unrecognized json type: " + err.Error())
 	}
 	return out

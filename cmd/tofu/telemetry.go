@@ -1,3 +1,8 @@
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package main
 
 import (
@@ -62,7 +67,7 @@ func openTelemetryInit() error {
 
 	otelResource := resource.NewWithAttributes(
 		semconv.SchemaURL,
-		semconv.ServiceNameKey.String("Terraform CLI"),
+		semconv.ServiceNameKey.String("OpenTofu CLI"),
 		semconv.ServiceVersionKey.String(version.Version),
 	)
 

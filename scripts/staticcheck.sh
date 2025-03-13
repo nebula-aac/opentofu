@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Copyright (c) HashiCorp, Inc.
+# Copyright (c) The OpenTofu Authors
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2023 HashiCorp, Inc.
 # SPDX-License-Identifier: MPL-2.0
 
 
@@ -9,13 +11,13 @@ echo "==> Checking that code complies with static analysis requirements..."
 skip="internal/legacy|backend/remote-state/"
 
 # Skip generated code for protobufs.
-skip=$skip"|internal/planproto|internal/tfplugin5|internal/tfplugin6"
+skip=$skip"|internal/planproto|internal/tfplugin5|internal/tfplugin6|internal/gohcl"
 
 packages=$(go list ./... | egrep -v ${skip})
 
 # We are skipping style-related checks, since tofu intentionally breaks
 # some of these. The goal here is to find issues that reduce code clarity, or
-# may result in bugs. We also disable fucntion deprecation checks (SA1019)
+# may result in bugs. We also disable function deprecation checks (SA1019)
 # because our policy is to update deprecated calls locally while making other
 # nearby changes, rather than to make cross-cutting changes to update them all.
 go run honnef.co/go/tools/cmd/staticcheck -checks 'all,-SA1019,-ST*' ${packages}

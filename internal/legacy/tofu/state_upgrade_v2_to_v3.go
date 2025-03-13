@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -100,7 +102,10 @@ func upgradeAttributesV2ToV3(instanceState *InstanceState) error {
 		// First, detect "obvious" maps - which have non-numeric keys (mostly).
 		hasNonNumericKeys := false
 		for _, key := range actualKeysMatching {
-			if _, err := strconv.Atoi(key); err != nil {
+			// Ensure that we attempt to parse the key using 64 bits, this is because the state
+			// could've been generated on a 64-bit system, and we need to be able to
+			// convert this on both a 32-bit and 64-bit arch.
+			if _, err := strconv.ParseInt(key, 10, 64); err != nil {
 				hasNonNumericKeys = true
 			}
 		}
