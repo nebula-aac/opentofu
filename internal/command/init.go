@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -24,8 +26,10 @@ import (
 	backendInit "github.com/opentofu/opentofu/internal/backend/init"
 	"github.com/opentofu/opentofu/internal/cloud"
 	"github.com/opentofu/opentofu/internal/command/arguments"
+	"github.com/opentofu/opentofu/internal/command/views"
 	"github.com/opentofu/opentofu/internal/configs"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/getproviders"
 	"github.com/opentofu/opentofu/internal/providercache"
 	"github.com/opentofu/opentofu/internal/states"
@@ -64,9 +68,21 @@ func (c *InitCommand) Run(args []string) int {
 	cmdFlags.StringVar(&flagLockfile, "lockfile", "", "Set a dependency lockfile mode")
 	cmdFlags.BoolVar(&c.Meta.ignoreRemoteVersion, "ignore-remote-version", false, "continue even if remote and local OpenTofu versions are incompatible")
 	cmdFlags.StringVar(&testsDirectory, "test-directory", "tests", "test-directory")
+	cmdFlags.BoolVar(&c.outputInJSON, "json", false, "json")
 	cmdFlags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := cmdFlags.Parse(args); err != nil {
 		return 1
+	}
+
+	if c.outputInJSON {
+		c.Meta.color = false
+		c.Meta.Color = false
+		c.oldUi = c.Ui
+		c.Ui = &WrappedUi{
+			cliUi:        c.oldUi,
+			jsonView:     views.NewJSONView(c.View),
+			outputInJSON: true,
+		}
 	}
 
 	backendFlagSet := arguments.FlagIsSet(cmdFlags, "backend")
@@ -188,6 +204,21 @@ func (c *InitCommand) Run(args []string) int {
 		return 1
 	}
 
+	var enc encryption.Encryption
+	// If backend flag is explicitly set to false i.e -backend=false, we disable state and plan encryption
+	if backendFlagSet && !flagBackend {
+		enc = encryption.Disabled()
+	} else {
+		// Load the encryption configuration
+		var encDiags tfdiags.Diagnostics
+		enc, encDiags = c.EncryptionFromModule(rootModEarly)
+		diags = diags.Append(encDiags)
+		if encDiags.HasErrors() {
+			c.showDiagnostics(diags)
+			return 1
+		}
+	}
+
 	var back backend.Backend
 
 	// There may be config errors or backend init errors but these will be shown later _after_
@@ -197,12 +228,12 @@ func (c *InitCommand) Run(args []string) int {
 
 	switch {
 	case flagCloud && rootModEarly.CloudConfig != nil:
-		back, backendOutput, backDiags = c.initCloud(ctx, rootModEarly, flagConfigExtra)
+		back, backendOutput, backDiags = c.initCloud(ctx, rootModEarly, flagConfigExtra, enc)
 	case flagBackend:
-		back, backendOutput, backDiags = c.initBackend(ctx, rootModEarly, flagConfigExtra)
+		back, backendOutput, backDiags = c.initBackend(ctx, rootModEarly, flagConfigExtra, enc)
 	default:
 		// load the previously-stored backend config
-		back, backDiags = c.Meta.backendFromState(ctx)
+		back, backDiags = c.Meta.backendFromState(ctx, enc.State())
 	}
 	if backendOutput {
 		header = true
@@ -220,13 +251,13 @@ func (c *InitCommand) Run(args []string) int {
 			c.Ui.Error(fmt.Sprintf("Error selecting workspace: %s", err))
 			return 1
 		}
-		sMgr, err := back.StateMgr(ctx, workspace)
+		sMgr, err := back.StateMgr(workspace)
 		if err != nil {
 			c.Ui.Error(fmt.Sprintf("Error loading state: %s", err))
 			return 1
 		}
 
-		if err := sMgr.RefreshState(ctx); err != nil {
+		if err := sMgr.RefreshState(); err != nil {
 			c.Ui.Error(fmt.Sprintf("Error refreshing state: %s", err))
 			return 1
 		}
@@ -264,12 +295,11 @@ func (c *InitCommand) Run(args []string) int {
 	}
 
 	// We've passed the core version check, now we can show errors from the
-	// configuration and backend initialisation.
+	// configuration and backend initialization.
 
 	// Now, we can check the diagnostics from the early configuration and the
 	// backend.
-	diags = diags.Append(earlyConfDiags)
-	diags = diags.Append(backDiags)
+	diags = diags.Append(earlyConfDiags.StrictDeduplicateMerge(backDiags))
 	if earlyConfDiags.HasErrors() {
 		c.Ui.Error(strings.TrimSpace(errInitConfigError))
 		c.showDiagnostics(diags)
@@ -411,9 +441,9 @@ func (c *InitCommand) getModules(ctx context.Context, path, testsDir string, ear
 	return true, installAbort, diags
 }
 
-func (c *InitCommand) initCloud(ctx context.Context, root *configs.Module, extraConfig rawFlags) (be backend.Backend, output bool, diags tfdiags.Diagnostics) {
+func (c *InitCommand) initCloud(ctx context.Context, root *configs.Module, extraConfig rawFlags, enc encryption.Encryption) (be backend.Backend, output bool, diags tfdiags.Diagnostics) {
 	ctx, span := tracer.Start(ctx, "initialize cloud backend")
-	_ = ctx // prevent staticcheck from complaining to avoid a maintenence hazard of having the wrong ctx in scope here
+	_ = ctx // prevent staticcheck from complaining to avoid a maintenance hazard of having the wrong ctx in scope here
 	defer span.End()
 
 	c.Ui.Output(c.Colorize().Color("\n[reset][bold]Initializing cloud backend..."))
@@ -434,14 +464,14 @@ func (c *InitCommand) initCloud(ctx context.Context, root *configs.Module, extra
 		Init:   true,
 	}
 
-	back, backDiags := c.Backend(opts)
+	back, backDiags := c.Backend(opts, enc.State())
 	diags = diags.Append(backDiags)
 	return back, true, diags
 }
 
-func (c *InitCommand) initBackend(ctx context.Context, root *configs.Module, extraConfig rawFlags) (be backend.Backend, output bool, diags tfdiags.Diagnostics) {
+func (c *InitCommand) initBackend(ctx context.Context, root *configs.Module, extraConfig rawFlags, enc encryption.Encryption) (be backend.Backend, output bool, diags tfdiags.Diagnostics) {
 	ctx, span := tracer.Start(ctx, "initialize backend")
-	_ = ctx // prevent staticcheck from complaining to avoid a maintenence hazard of having the wrong ctx in scope here
+	_ = ctx // prevent staticcheck from complaining to avoid a maintenance hazard of having the wrong ctx in scope here
 	defer span.End()
 
 	c.Ui.Output(c.Colorize().Color("\n[reset][bold]Initializing the backend..."))
@@ -476,8 +506,8 @@ func (c *InitCommand) initBackend(ctx context.Context, root *configs.Module, ext
 			return nil, true, diags
 		}
 
-		b := bf()
-		backendSchema := b.ConfigSchema(ctx)
+		b := bf(nil) // This is only used to get the schema, encryption should panic if attempted
+		backendSchema := b.ConfigSchema()
 		backendConfig = root.Backend
 
 		var overrideDiags tfdiags.Diagnostics
@@ -517,7 +547,7 @@ the backend configuration is present and valid.
 		Init:           true,
 	}
 
-	back, backDiags := c.Backend(opts)
+	back, backDiags := c.Backend(opts, enc.State())
 	diags = diags.Append(backDiags)
 	return back, true, diags
 }
@@ -536,7 +566,7 @@ func (c *InitCommand) getProviders(ctx context.Context, config *configs.Config, 
 
 	// First we'll collect all the provider dependencies we can see in the
 	// configuration and the state.
-	reqs, hclDiags := config.ProviderRequirements()
+	reqs, qualifs, hclDiags := config.ProviderRequirements()
 	diags = diags.Append(hclDiags)
 	if hclDiags.HasErrors() {
 		return false, true, diags
@@ -546,7 +576,13 @@ func (c *InitCommand) getProviders(ctx context.Context, config *configs.Config, 
 		reqs = reqs.Merge(stateReqs)
 	}
 
+	potentialProviderConflicts := make(map[string][]string)
+
 	for providerAddr := range reqs {
+		if providerAddr.Namespace == "hashicorp" || providerAddr.Namespace == "opentofu" {
+			potentialProviderConflicts[providerAddr.Type] = append(potentialProviderConflicts[providerAddr.Type], providerAddr.ForDisplay())
+		}
+
 		if providerAddr.IsLegacy() {
 			diags = diags.Append(tfdiags.Sourceless(
 				tfdiags.Error,
@@ -554,6 +590,20 @@ func (c *InitCommand) getProviders(ctx context.Context, config *configs.Config, 
 				fmt.Sprintf(
 					"This configuration or its associated state refers to the unqualified provider %q.\n\nYou must complete the Terraform 0.13 upgrade process before upgrading to later versions.",
 					providerAddr.Type,
+				),
+			))
+		}
+	}
+
+	for name, addrs := range potentialProviderConflicts {
+		if len(addrs) > 1 {
+			diags = diags.Append(tfdiags.Sourceless(
+				tfdiags.Warning,
+				"Potential provider misconfiguration",
+				fmt.Sprintf(
+					"OpenTofu has detected multiple providers of type %s (%s) which may be a misconfiguration.\n\nIf this is intentional you can ignore this warning",
+					name,
+					strings.Join(addrs, ", "),
 				),
 			))
 		}
@@ -658,6 +708,13 @@ func (c *InitCommand) getProviders(ctx context.Context, config *configs.Config, 
 					)
 				}
 
+				if provider.Hostname == addrs.DefaultProviderRegistryHost {
+					suggestion += "\n\nIf you believe this provider is missing from the registry, please submit a issue on the OpenTofu Registry https://github.com/opentofu/registry/issues/new/choose"
+				}
+
+				warnDiags := warnOnFailedImplicitProvReference(provider, qualifs)
+				diags = diags.Append(warnDiags)
+
 				diags = diags.Append(tfdiags.Sourceless(
 					tfdiags.Error,
 					"Failed to query available provider packages",
@@ -711,8 +768,8 @@ func (c *InitCommand) getProviders(ctx context.Context, config *configs.Config, 
 			default:
 				diags = diags.Append(tfdiags.Sourceless(
 					tfdiags.Error,
-					"Failed to query available provider packages",
-					fmt.Sprintf("Could not retrieve the list of available versions for provider %s: %s",
+					"Failed to resolve provider packages",
+					fmt.Sprintf("Could not resolve provider %s: %s",
 						provider.ForDisplay(), err,
 					),
 				))
@@ -923,7 +980,7 @@ func (c *InitCommand) getProviders(ctx context.Context, config *configs.Config, 
 	if !newLocks.Equal(previousLocks) {
 		// if readonly mode
 		if flagLockfile == "readonly" {
-			// check if required provider dependences change
+			// check if required provider dependencies change
 			if !newLocks.EqualProviderAddress(previousLocks) {
 				diags = diags.Append(tfdiags.Sourceless(
 					tfdiags.Error,
@@ -983,6 +1040,43 @@ version control system if they represent changes you intended to make.`))
 	}
 
 	return true, false, diags
+}
+
+// warnOnFailedImplicitProvReference returns a warn diagnostic when the downloader fails to fetch a provider that is implicitly referenced.
+// In other words, if the failed to download provider is having no required_providers entry, this function is trying to give to the user
+// more information on the source of the issue and gives also instructions on how to fix it.
+func warnOnFailedImplicitProvReference(provider addrs.Provider, qualifs *getproviders.ProvidersQualification) tfdiags.Diagnostics {
+	if _, ok := qualifs.Explicit[provider]; ok {
+		return nil
+	}
+	refs, ok := qualifs.Implicit[provider]
+	if !ok || len(refs) == 0 {
+		// If there is no implicit reference for that provider, do not write the warn, let just the error to be returned.
+		return nil
+	}
+
+	// NOTE: if needed, in the future we can use the rest of the "refs" to print all the culprits or at least to give
+	// a hint on how many resources are causing this
+	ref := refs[0]
+	if ref.ProviderAttribute {
+		return nil
+	}
+	details := fmt.Sprintf(
+		implicitProviderReferenceBody,
+		ref.CfgRes.String(),
+		provider.Type,
+		provider.ForDisplay(),
+		provider.Type,
+		ref.CfgRes.Resource.Type,
+		provider.Type,
+	)
+	return tfdiags.Diagnostics{}.Append(
+		&hcl.Diagnostic{
+			Severity: hcl.DiagWarning,
+			Subject:  ref.Ref.ToHCL().Ptr(),
+			Summary:  implicitProviderReferenceHead,
+			Detail:   details,
+		})
 }
 
 // backendConfigOverrideBody interprets the raw values of -backend-config
@@ -1146,8 +1240,20 @@ Options:
                           times. The backend type must be in the configuration
                           itself.
 
+  -compact-warnings       If OpenTofu produces any warnings that are not
+                          accompanied by errors, show them in a more compact
+                          form that includes only the summary messages.
+
+  -consolidate-warnings   If OpenTofu produces any warnings, no consolidation
+                          will be performed. All locations, for all warnings
+                          will be listed. Enabled by default.
+
+  -consolidate-errors     If OpenTofu produces any errors, no consolidation
+                          will be performed. All locations, for all errors
+                          will be listed. Disabled by default
+
   -force-copy             Suppress prompts about copying state data when
-                          initializating a new state backend. This is
+                          initializing a new state backend. This is
                           equivalent to providing a "yes" to all confirmation
                           prompts.
 
@@ -1198,6 +1304,19 @@ Options:
                           test command will search for test files in the current directory and
                           in the one specified by the flag.
 
+  -json                   Produce output in a machine-readable JSON format, 
+                          suitable for use in text editor integrations and other 
+                          automated systems. Always disables color.
+
+  -var 'foo=bar'          Set a value for one of the input variables in the root
+                          module of the configuration. Use this option more than
+                          once to set more than one variable.
+
+  -var-file=filename      Load variable values from the given file, in addition
+                          to the default files terraform.tfvars and *.auto.tfvars.
+                          Use this option more than once to include more than one
+                          variables file.
+
 `
 	return strings.TrimSpace(helpText)
 }
@@ -1207,7 +1326,7 @@ func (c *InitCommand) Synopsis() string {
 }
 
 const errInitConfigError = `
-[reset]OpenTofu encountered problems during initialisation, including problems
+[reset]OpenTofu encountered problems during initialization, including problems
 with the configuration, described below.
 
 The OpenTofu configuration must be valid before initialization so that
@@ -1300,3 +1419,14 @@ The current .terraform.lock.hcl file only includes checksums for %s, so OpenTofu
 To calculate additional checksums for another platform, run:
   tofu providers lock -platform=linux_amd64
 (where linux_amd64 is the platform to generate)`
+
+const implicitProviderReferenceHead = `Automatically-inferred provider dependency`
+
+const implicitProviderReferenceBody = `Due to the prefix of the resource type name OpenTofu guessed that you intended to associate %s with a provider whose local name is "%s", but that name is not declared in this module's required_providers block. OpenTofu therefore guessed that you intended to use %s, but that provider does not exist.
+
+Make at least one of the following changes to tell OpenTofu which provider to use:
+
+- Add a declaration for local name "%s" to this module's required_providers block, specifying the full source address for the provider you intended to use.
+- Verify that "%s" is the correct resource type name to use. Did you omit a prefix which would imply the correct provider?
+- Use a "provider" argument within this resource block to override OpenTofu's automatic selection of the local name "%s".
+`

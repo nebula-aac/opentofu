@@ -1,9 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package addrs
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -11,6 +14,10 @@ import (
 )
 
 func TestParseModuleSource(t *testing.T) {
+
+	absolutePath, absolutePathModulePackage := testDataAbsolutePath()
+	absolutePathSubdir, absolutePathSubdirModulePackage := testDataAbsolutePathSubdir()
+
 	tests := map[string]struct {
 		input   string
 		want    ModuleSource
@@ -131,6 +138,27 @@ func TestParseModuleSource(t *testing.T) {
 				Subdir:  "example/foo",
 			},
 		},
+		"github.com with branch and subdir": {
+			input: "github.com/hashicorp/terraform-cidr-subnets//example/foo?ref=bar",
+			want: ModuleSourceRemote{
+				Package: ModulePackage("git::https://github.com/hashicorp/terraform-cidr-subnets.git?ref=bar"),
+				Subdir:  "example/foo",
+			},
+		},
+		"github.com with subdir and malformed query params": {
+			input: "github.com/hashicorp/terraform-cidr-subnets//example/foo?",
+			want: ModuleSourceRemote{
+				Package: ModulePackage("git::https://github.com/hashicorp/terraform-cidr-subnets.git"),
+				Subdir:  "example/foo",
+			},
+		},
+		"github.com subdir from a branch containing slash in the name": {
+			input: "github.com/hashicorp/terraform-cidr-subnets//example/foo?ref=bar/baz",
+			want: ModuleSourceRemote{
+				Package: ModulePackage("git::https://github.com/hashicorp/terraform-cidr-subnets.git?ref=bar/baz"),
+				Subdir:  "example/foo",
+			},
+		},
 		"git protocol, URL-style": {
 			input: "git://example.com/code/baz.git",
 			want: ModuleSourceRemote{
@@ -194,7 +222,7 @@ func TestParseModuleSource(t *testing.T) {
 		},
 
 		// NOTE: We intentionally don't test the bitbucket.org shorthands
-		// here, because that detector makes direct HTTP tequests to the
+		// here, because that detector makes direct HTTP requests to the
 		// Bitbucket API and thus isn't appropriate for unit testing.
 
 		"Google Cloud Storage bucket implied, path prefix": {
@@ -268,15 +296,14 @@ func TestParseModuleSource(t *testing.T) {
 				Package: ModulePackage("https://example.com/module?archive=tar&checksum=blah"),
 			},
 		},
-
 		"absolute filesystem path": {
 			// Although a local directory isn't really "remote", we do
 			// treat it as such because we still need to do all of the same
 			// high-level steps to work with these, even though "downloading"
 			// is replaced by a deep filesystem copy instead.
-			input: "/tmp/foo/example",
+			input: absolutePath,
 			want: ModuleSourceRemote{
-				Package: ModulePackage("file:///tmp/foo/example"),
+				Package: ModulePackage(absolutePathModulePackage),
 			},
 		},
 		"absolute filesystem path, subdir": {
@@ -285,9 +312,9 @@ func TestParseModuleSource(t *testing.T) {
 			// multiple modules, but the entry point is not at the root
 			// of that subtree, and so they can use the usual subdir
 			// syntax to move the package root higher in the real filesystem.
-			input: "/tmp/foo//example",
+			input: absolutePathSubdir,
 			want: ModuleSourceRemote{
-				Package: ModulePackage("file:///tmp/foo"),
+				Package: ModulePackage(absolutePathSubdirModulePackage),
 				Subdir:  "example",
 			},
 		},
@@ -362,7 +389,7 @@ func TestModuleSourceRemoteFromRegistry(t *testing.T) {
 		}
 		gotAddr := remote.FromRegistry(registry)
 		if remote.Subdir != "foo" {
-			t.Errorf("FromRegistry modified the reciever; should be pure function")
+			t.Errorf("FromRegistry modified the receiver; should be pure function")
 		}
 		if registry.Subdir != "bar" {
 			t.Errorf("FromRegistry modified the given address; should be pure function")
@@ -381,7 +408,7 @@ func TestModuleSourceRemoteFromRegistry(t *testing.T) {
 		}
 		gotAddr := remote.FromRegistry(registry)
 		if remote.Subdir != "foo" {
-			t.Errorf("FromRegistry modified the reciever; should be pure function")
+			t.Errorf("FromRegistry modified the receiver; should be pure function")
 		}
 		if registry.Subdir != "" {
 			t.Errorf("FromRegistry modified the given address; should be pure function")
@@ -400,7 +427,7 @@ func TestModuleSourceRemoteFromRegistry(t *testing.T) {
 		}
 		gotAddr := remote.FromRegistry(registry)
 		if remote.Subdir != "" {
-			t.Errorf("FromRegistry modified the reciever; should be pure function")
+			t.Errorf("FromRegistry modified the receiver; should be pure function")
 		}
 		if registry.Subdir != "bar" {
 			t.Errorf("FromRegistry modified the given address; should be pure function")
@@ -630,4 +657,24 @@ func TestParseModuleSourceRegistry(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testDataAbsolutePath() (absolutePath string, modulePackage string) {
+	absolutePath = "/tmp/foo/example"
+	modulePackage = "file:///tmp/foo/example"
+	if runtime.GOOS == "windows" {
+		absolutePath = "C:\\tmp\\foo\\example"
+		modulePackage = "C:\\tmp\\foo\\example"
+	}
+	return
+}
+
+func testDataAbsolutePathSubdir() (absolutePath string, modulePackage string) {
+	absolutePath = "/tmp/foo//example"
+	modulePackage = "file:///tmp/foo"
+	if runtime.GOOS == "windows" {
+		absolutePath = "C:\\tmp\\foo//example"
+		modulePackage = "C:\\tmp\\foo"
+	}
+	return
 }

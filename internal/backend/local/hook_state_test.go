@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package local
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -256,7 +257,7 @@ func (sm *testPersistentState) WriteState(state *states.State) error {
 	return nil
 }
 
-func (sm *testPersistentState) PersistState(_ context.Context, schemas *tofu.Schemas) error {
+func (sm *testPersistentState) PersistState(schemas *tofu.Schemas) error {
 	if schemas == nil {
 		return fmt.Errorf("no schemas")
 	}
@@ -282,7 +283,7 @@ func (sm *testPersistentStateThatRefusesToPersist) WriteState(state *states.Stat
 	return nil
 }
 
-func (sm *testPersistentStateThatRefusesToPersist) PersistState(_ context.Context, schemas *tofu.Schemas) error {
+func (sm *testPersistentStateThatRefusesToPersist) PersistState(schemas *tofu.Schemas) error {
 	if schemas == nil {
 		return fmt.Errorf("no schemas")
 	}

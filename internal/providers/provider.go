@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package providers
@@ -11,9 +13,14 @@ import (
 	"github.com/opentofu/opentofu/internal/tfdiags"
 )
 
-// Interface represents the set of methods required for a complete resource
-// provider plugin.
-type Interface interface {
+// Unconfigured represents a provider plugin that has not yet been configured. It has
+// limited functionality that must not depend on ConfigureProvider having been called.
+type Unconfigured interface {
+	// GetMetadata is not yet implemented or used at this time. It may
+	// be used in the future to avoid loading a provider's full schema
+	// for initial validation. This could result in some potential
+	// memory savings.
+
 	// GetSchema returns the complete schema for the provider.
 	GetProviderSchema() GetProviderSchemaResponse
 
@@ -31,14 +38,21 @@ type Interface interface {
 	// configuration values.
 	ValidateDataResourceConfig(ValidateDataResourceConfigRequest) ValidateDataResourceConfigResponse
 
-	// UpgradeResourceState is called when the state loader encounters an
-	// instance state whose schema version is less than the one reported by the
-	// currently-used version of the corresponding provider, and the upgraded
-	// result is used for any further processing.
-	UpgradeResourceState(UpgradeResourceStateRequest) UpgradeResourceStateResponse
+	// MoveResourceState requests that the given resource data be moved from one
+	// type to another, potentially between providers as well.
+	MoveResourceState(MoveResourceStateRequest) MoveResourceStateResponse
+
+	// CallFunction requests that the given function is called and response returned.
+	// There is a bit of a quirk in OpenTofu-land.  We allow providers to supply
+	// additional functions via GetFunctions() after configuration.  Those functions
+	// will only be available via CallFunction after ConfigureProvider is called.
+	CallFunction(CallFunctionRequest) CallFunctionResponse
 
 	// Configure configures and initialized the provider.
 	ConfigureProvider(ConfigureProviderRequest) ConfigureProviderResponse
+
+	// Close shuts down the plugin process if applicable.
+	Close() error
 
 	// Stop is called when the provider should halt any in-flight actions.
 	//
@@ -51,6 +65,20 @@ type Interface interface {
 	// stop somehow failed and that the user should expect potentially waiting
 	// a longer period of time.
 	Stop() error
+}
+
+// Configured represents a provider plugin that has been configured. It has additional
+// functionallity on top of the Unconfigured interface that depends on ConfigureProvider
+// having been called.
+type Configured interface {
+	// A configured provider can do anything a unconfigured provider can.
+	Unconfigured
+
+	// UpgradeResourceState is called when the state loader encounters an
+	// instance state whose schema version is less than the one reported by the
+	// currently-used version of the corresponding provider, and the upgraded
+	// result is used for any further processing.
+	UpgradeResourceState(UpgradeResourceStateRequest) UpgradeResourceStateResponse
 
 	// ReadResource refreshes a resource and returns its current state.
 	ReadResource(ReadResourceRequest) ReadResourceResponse
@@ -70,8 +98,16 @@ type Interface interface {
 	// ReadDataSource returns the data source's current state.
 	ReadDataSource(ReadDataSourceRequest) ReadDataSourceResponse
 
-	// Close shuts down the plugin process if applicable.
-	Close() error
+	// GetFunctions returns a full list of functions defined in this provider. It should be a super
+	// set of the functions returned in GetProviderSchema()
+	GetFunctions() GetFunctionsResponse
+}
+
+// Interface represents the set of methods required for a complete resource
+// provider plugin. Longer term, we could remove this interface in favor of it's
+// component parts (Unconfigured, Configured) for added safety and clarity.
+type Interface interface {
+	Configured
 }
 
 // GetProviderSchemaResponse is the return type for GetProviderSchema, and
@@ -97,6 +133,9 @@ type GetProviderSchemaResponse struct {
 
 	// ServerCapabilities lists optional features supported by the provider.
 	ServerCapabilities ServerCapabilities
+
+	// Functions lists all functions supported by this provider.
+	Functions map[string]FunctionSpec
 }
 
 // Schema pairs a provider or resource schema with that schema's version.
@@ -123,8 +162,51 @@ type ServerCapabilities struct {
 	// provider does not require calling GetProviderSchema to operate
 	// normally, and the caller can used a cached copy of the provider's
 	// schema.
+	// In other words, the providers for which GetProviderSchemaOptional is false
+	// require their schema to be read after EVERY instantiation to function normally.
 	GetProviderSchemaOptional bool
 }
+
+type FunctionSpec struct {
+	// List of parameters required to call the function
+	Parameters []FunctionParameterSpec
+	// Optional Spec for variadic parameters
+	VariadicParameter *FunctionParameterSpec
+	// Type which the function will return
+	Return cty.Type
+	// Human-readable shortened documentation for the function
+	Summary string
+	// Human-readable documentation for the function
+	Description string
+	// Formatting type of the Description field
+	DescriptionFormat TextFormatting
+	// Human-readable message present if the function is deprecated
+	DeprecationMessage string
+}
+
+type FunctionParameterSpec struct {
+	// Human-readable display name for the parameter
+	Name string
+	// Type constraint for the parameter
+	Type cty.Type
+	// Null values allowed for the parameter
+	AllowNullValue bool
+	// Unknown Values allowed for the parameter
+	// Individual provider implementations may interpret this as a
+	// check using IsWhollyKnown instead cty's default of IsKnown.
+	// If the input is not wholly known, the result should be
+	// cty.UnknownVal(spec.returnType)
+	AllowUnknownValues bool
+	// Human-readable documentation for the parameter
+	Description string
+	// Formatting type of the Description field
+	DescriptionFormat TextFormatting
+}
+
+type TextFormatting string
+
+const TextFormattingPlain = TextFormatting("Plain")
+const TextFormattingMarkdown = TextFormatting("Markdown")
 
 type ValidateProviderConfigRequest struct {
 	// Config is the raw configuration value for the provider.
@@ -173,7 +255,7 @@ type UpgradeResourceStateRequest struct {
 	// Version is version of the schema that created the current state.
 	Version int64
 
-	// RawStateJSON and RawStateFlatmap contiain the state that needs to be
+	// RawStateJSON and RawStateFlatmap contain the state that needs to be
 	// upgraded to match the current schema version. Because the schema is
 	// unknown, this contains only the raw data as stored in the state.
 	// RawStateJSON is the current json state encoding.
@@ -396,6 +478,37 @@ func (ir ImportedResource) AsInstanceObject() *states.ResourceInstanceObject {
 	}
 }
 
+type MoveResourceStateRequest struct {
+	// The address of the provider the resource is being moved from.
+	SourceProviderAddress string
+	// The resource type that the resource is being moved from.
+	SourceTypeName string
+	// The schema version of the resource type that the resource is being
+	// moved from.
+	SourceSchemaVersion uint64
+	// The raw state of the resource being moved. Only the json field is
+	// populated, as there should be no legacy providers using the flatmap
+	// format that support newly introduced RPCs.
+	SourceStateJSON    []byte
+	SourceStateFlatmap map[string]string // Unused
+
+	// The private state of the resource being moved.
+	SourcePrivate []byte
+
+	// The resource type that the resource is being moved to.
+	TargetTypeName string
+}
+
+type MoveResourceStateResponse struct {
+	// The state of the resource after it has been moved.
+	TargetState cty.Value
+	// The private state of the resource after it has been moved.
+	TargetPrivate []byte
+
+	// Diagnostics contains any warnings or errors from the method call.
+	Diagnostics tfdiags.Diagnostics
+}
+
 type ReadDataSourceRequest struct {
 	// TypeName is the name of the data source type to Read.
 	TypeName string
@@ -416,4 +529,29 @@ type ReadDataSourceResponse struct {
 
 	// Diagnostics contains any warnings or errors from the method call.
 	Diagnostics tfdiags.Diagnostics
+}
+
+type GetFunctionsResponse struct {
+	Functions map[string]FunctionSpec
+
+	Diagnostics tfdiags.Diagnostics
+}
+
+type CallFunctionRequest struct {
+	Name      string
+	Arguments []cty.Value
+}
+
+type CallFunctionResponse struct {
+	Result cty.Value
+	Error  error
+}
+
+type CallFunctionArgumentError struct {
+	Text             string
+	FunctionArgument int
+}
+
+func (err *CallFunctionArgumentError) Error() string {
+	return err.Text
 }

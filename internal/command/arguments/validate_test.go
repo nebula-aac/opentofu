@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package arguments
@@ -66,6 +68,7 @@ func TestParseValidate_valid(t *testing.T) {
 			if len(diags) > 0 {
 				t.Fatalf("unexpected diags: %v", diags)
 			}
+			got.Vars = nil
 			if *got != *tc.want {
 				t.Fatalf("unexpected result\n got: %#v\nwant: %#v", got, tc.want)
 			}
@@ -114,6 +117,7 @@ func TestParseValidate_invalid(t *testing.T) {
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
 			got, gotDiags := ParseValidate(tc.args)
+			got.Vars = nil
 			if *got != *tc.want {
 				t.Fatalf("unexpected result\n got: %#v\nwant: %#v", got, tc.want)
 			}

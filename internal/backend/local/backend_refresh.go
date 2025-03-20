@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package local
@@ -24,6 +26,15 @@ func (b *Local) opRefresh(
 
 	var diags tfdiags.Diagnostics
 
+	// For the moment we have a bit of a tangled mess of context.Context here, for
+	// historical reasons. Hopefully we'll clean this up one day, but here's the
+	// guide for now:
+	// - ctx is used only for its values, and should be connected to the top-level ctx
+	//   from "package main" so that we can obtain telemetry objects, etc from it.
+	// - stopCtx is cancelled to trigger a graceful shutdown.
+	// - cancelCtx is cancelled for a graceless shutdown.
+	ctx := context.WithoutCancel(stopCtx)
+
 	// Check if our state exists if we're performing a refresh operation. We
 	// only do this if we're managing state with this backend.
 	if b.Backend == nil {
@@ -48,7 +59,7 @@ func (b *Local) opRefresh(
 	op.PlanRefresh = true
 
 	// Get our context
-	lr, _, opState, contextDiags := b.localRun(op)
+	lr, _, opState, contextDiags := b.localRun(ctx, op)
 	diags = diags.Append(contextDiags)
 	if contextDiags.HasErrors() {
 		op.ReportResult(runningOp, diags)
@@ -88,10 +99,11 @@ func (b *Local) opRefresh(
 	var newState *states.State
 	var refreshDiags tfdiags.Diagnostics
 	doneCh := make(chan struct{})
+	panicHandler := logging.PanicHandlerWithTraceFn()
 	go func() {
-		defer logging.PanicHandler()
+		defer panicHandler()
 		defer close(doneCh)
-		newState, refreshDiags = lr.Core.Refresh(lr.Config, lr.InputState, lr.PlanOpts)
+		newState, refreshDiags = lr.Core.Refresh(ctx, lr.Config, lr.InputState, lr.PlanOpts)
 		log.Printf("[INFO] backend/local: refresh calling Refresh")
 	}()
 

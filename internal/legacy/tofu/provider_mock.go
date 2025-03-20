@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -346,6 +348,10 @@ func (p *MockProvider) ImportResourceState(r providers.ImportResourceStateReques
 	return p.ImportResourceStateResponse
 }
 
+func (p *MockProvider) MoveResourceState(_ providers.MoveResourceStateRequest) providers.MoveResourceStateResponse {
+	panic("not implemented")
+}
+
 func (p *MockProvider) ReadDataSource(r providers.ReadDataSourceRequest) providers.ReadDataSourceResponse {
 	p.Lock()
 	defer p.Unlock()
@@ -358,6 +364,14 @@ func (p *MockProvider) ReadDataSource(r providers.ReadDataSourceRequest) provide
 	}
 
 	return p.ReadDataSourceResponse
+}
+
+func (p *MockProvider) GetFunctions() providers.GetFunctionsResponse {
+	panic("Not Implemented")
+}
+
+func (p *MockProvider) CallFunction(r providers.CallFunctionRequest) providers.CallFunctionResponse {
+	panic("Not Implemented")
 }
 
 func (p *MockProvider) Close() error {

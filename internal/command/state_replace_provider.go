@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -77,8 +78,16 @@ func (c *StateReplaceProviderCommand) Run(args []string) int {
 		return 1
 	}
 
+	// Load the encryption configuration
+	enc, encDiags := c.Encryption()
+	diags = diags.Append(encDiags)
+	if encDiags.HasErrors() {
+		c.showDiagnostics(diags)
+		return 1
+	}
+
 	// Initialize the state manager as configured
-	stateMgr, err := c.State()
+	stateMgr, err := c.State(enc)
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf(errStateLoadingState, err))
 		return 1
@@ -98,10 +107,8 @@ func (c *StateReplaceProviderCommand) Run(args []string) int {
 		}()
 	}
 
-	ctx := context.TODO()
-
 	// Refresh and load state
-	if err := stateMgr.RefreshState(ctx); err != nil {
+	if err := stateMgr.RefreshState(); err != nil {
 		c.Ui.Error(fmt.Sprintf("Failed to refresh source state: %s", err))
 		return 1
 	}
@@ -168,7 +175,7 @@ func (c *StateReplaceProviderCommand) Run(args []string) int {
 		resource.ProviderConfig.Provider = to
 	}
 
-	b, backendDiags := c.Backend(nil)
+	b, backendDiags := c.Backend(nil, enc.State())
 	diags = diags.Append(backendDiags)
 	if backendDiags.HasErrors() {
 		c.showDiagnostics(diags)
@@ -188,7 +195,7 @@ func (c *StateReplaceProviderCommand) Run(args []string) int {
 		c.Ui.Error(fmt.Sprintf(errStateRmPersist, err))
 		return 1
 	}
-	if err := stateMgr.PersistState(ctx, schemas); err != nil {
+	if err := stateMgr.PersistState(schemas); err != nil {
 		c.Ui.Error(fmt.Sprintf(errStateRmPersist, err))
 		return 1
 	}
@@ -216,6 +223,15 @@ Options:
 
   -ignore-remote-version  A rare option used for the remote backend only. See
                           the remote backend documentation for more information.
+
+  -var 'foo=bar'          Set a value for one of the input variables in the root
+                          module of the configuration. Use this option more than
+                          once to set more than one variable.
+
+  -var-file=filename      Load variable values from the given file, in addition
+                          to the default files terraform.tfvars and *.auto.tfvars.
+                          Use this option more than once to include more than one
+                          variables file.
 
   -state, state-out, and -backup are legacy options supported for the local
   backend only. For more information, see the local backend's documentation.

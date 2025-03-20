@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package registry
@@ -20,6 +22,7 @@ import (
 	"github.com/hashicorp/go-retryablehttp"
 	svchost "github.com/hashicorp/terraform-svchost"
 	"github.com/hashicorp/terraform-svchost/disco"
+
 	"github.com/opentofu/opentofu/internal/httpclient"
 	"github.com/opentofu/opentofu/internal/logging"
 	"github.com/opentofu/opentofu/internal/registry/regsrc"
@@ -61,7 +64,7 @@ func init() {
 	configureRequestTimeout()
 }
 
-// Client provides methods to query Terraform Registries.
+// Client provides methods to query OpenTofu Registries.
 type Client struct {
 	// this is the client to be used for all requests.
 	client *retryablehttp.Client
@@ -166,7 +169,7 @@ func (c *Client) ModuleVersions(ctx context.Context, module *regsrc.Module) (*re
 
 	for _, mod := range versions.Modules {
 		for _, v := range mod.Versions {
-			log.Printf("[DEBUG] found available version %q for %s", v.Version, mod.Source)
+			log.Printf("[DEBUG] found available version %q for %s", v.Version, module.Module())
 		}
 	}
 
@@ -227,24 +230,40 @@ func (c *Client) ModuleLocation(ctx context.Context, module *regsrc.Module, vers
 	}
 	defer resp.Body.Close()
 
-	// there should be no body, but save it for logging
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("error reading response body from registry: %w", err)
 	}
 
+	var location string
+
 	switch resp.StatusCode {
-	case http.StatusOK, http.StatusNoContent:
-		// OK
+	case http.StatusOK:
+		var v response.ModuleLocationRegistryResp
+		if err := json.Unmarshal(body, &v); err != nil {
+			return "", fmt.Errorf("module %q version %q failed to deserialize response body %s: %w",
+				module, version, body, err)
+		}
+
+		location = v.Location
+
+		// if the location is empty, we will fallback to the header
+		if location == "" {
+			location = resp.Header.Get(xTerraformGet)
+		}
+
+	case http.StatusNoContent:
+		// FALLBACK: set the found location from the header
+		location = resp.Header.Get(xTerraformGet)
+
 	case http.StatusNotFound:
 		return "", fmt.Errorf("module %q version %q not found", module, version)
+
 	default:
 		// anything else is an error:
 		return "", fmt.Errorf("error getting download location for %q: %s resp:%s", module, resp.Status, body)
 	}
 
-	// the download location is in the X-Terraform-Get header
-	location := resp.Header.Get(xTerraformGet)
 	if location == "" {
 		return "", fmt.Errorf("failed to get download URL for %q: %s resp:%s", module, resp.Status, body)
 	}

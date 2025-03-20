@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 // Package terminal encapsulates some platform-specific logic for detecting
@@ -29,7 +31,7 @@ import (
 // available, such as detecting the current terminal width. If we're connected
 // to something else, such as a pipe or a file on disk, the stream will
 // typically provide placeholder values or do-nothing stubs for
-// terminal-requiring operatons.
+// terminal-requiring operations.
 //
 // Note that it's possible for only a subset of the streams to be connected
 // to a terminal. For example, this happens if the user runs OpenTofu with

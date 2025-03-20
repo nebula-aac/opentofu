@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package views
@@ -11,6 +13,7 @@ import (
 
 	"github.com/opentofu/opentofu/internal/addrs"
 	"github.com/opentofu/opentofu/internal/command/arguments"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/lang/globalref"
 	"github.com/opentofu/opentofu/internal/plans"
 	"github.com/opentofu/opentofu/internal/states"
@@ -65,7 +68,7 @@ func TestOperation_emergencyDumpState(t *testing.T) {
 
 	stateFile := statefile.New(nil, "foo", 1)
 
-	err := v.EmergencyDumpState(stateFile)
+	err := v.EmergencyDumpState(stateFile, encryption.StateEncryptionDisabled())
 	if err != nil {
 		t.Fatalf("unexpected error dumping state: %s", err)
 	}
@@ -306,6 +309,7 @@ func TestOperation_planNoChanges(t *testing.T) {
 								AttrsJSON: []byte(`{}`),
 							},
 							addrs.RootModuleInstance.ProviderConfigDefault(addrs.NewDefaultProvider("test")),
+							addrs.NoKey,
 						)
 					}),
 					PriorState: states.NewState(),
@@ -530,7 +534,7 @@ func TestOperationJSON_emergencyDumpState(t *testing.T) {
 
 	stateFile := statefile.New(nil, "foo", 1)
 	stateBuf := new(bytes.Buffer)
-	err := statefile.Write(stateFile, stateBuf)
+	err := statefile.Write(stateFile, stateBuf, encryption.StateEncryptionDisabled())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -540,7 +544,7 @@ func TestOperationJSON_emergencyDumpState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = v.EmergencyDumpState(stateFile)
+	err = v.EmergencyDumpState(stateFile, encryption.StateEncryptionDisabled())
 	if err != nil {
 		t.Fatalf("unexpected error dumping state: %s", err)
 	}
@@ -578,6 +582,7 @@ func TestOperationJSON_planNoChanges(t *testing.T) {
 				"add":       float64(0),
 				"import":    float64(0),
 				"change":    float64(0),
+				"forget":    float64(0),
 				"remove":    float64(0),
 			},
 		},
@@ -746,6 +751,7 @@ func TestOperationJSON_plan(t *testing.T) {
 				"add":       float64(3),
 				"import":    float64(0),
 				"change":    float64(1),
+				"forget":    float64(0),
 				"remove":    float64(3),
 			},
 		},
@@ -893,6 +899,7 @@ func TestOperationJSON_planWithImport(t *testing.T) {
 				"add":       float64(1),
 				"import":    float64(4),
 				"change":    float64(1),
+				"forget":    float64(0),
 				"remove":    float64(2),
 			},
 		},
@@ -1030,6 +1037,7 @@ func TestOperationJSON_planDriftWithMove(t *testing.T) {
 				"add":       float64(0),
 				"import":    float64(0),
 				"change":    float64(0),
+				"forget":    float64(0),
 				"remove":    float64(0),
 			},
 		},
@@ -1161,6 +1169,7 @@ func TestOperationJSON_planDriftWithMoveRefreshOnly(t *testing.T) {
 				"add":       float64(0),
 				"import":    float64(0),
 				"change":    float64(0),
+				"forget":    float64(0),
 				"remove":    float64(0),
 			},
 		},
@@ -1222,6 +1231,7 @@ func TestOperationJSON_planOutputChanges(t *testing.T) {
 				"import":    float64(0),
 				"change":    float64(0),
 				"remove":    float64(0),
+				"forget":    float64(0),
 			},
 		},
 		// Output changes

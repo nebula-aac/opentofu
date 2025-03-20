@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -193,6 +195,27 @@ func TestPlanGraphBuilder_targetModule(t *testing.T) {
 	testGraphNotContains(t, g, "module.child1.test_object.foo")
 }
 
+func TestPlanGraphBuilder_excludeModule(t *testing.T) {
+	b := &PlanGraphBuilder{
+		Config:  testModule(t, "graph-builder-plan-target-module-provider"),
+		Plugins: simpleMockPluginLibrary(),
+		Excludes: []addrs.Targetable{
+			addrs.RootModuleInstance.Child("child1", addrs.NoKey),
+		},
+		Operation: walkPlan,
+	}
+
+	g, err := b.Build(addrs.RootModuleInstance)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	t.Logf("Graph: %s", g.String())
+
+	testGraphNotContains(t, g, `module.child1.provider["registry.opentofu.org/hashicorp/test"]`)
+	testGraphNotContains(t, g, "module.child1.test_object.foo")
+}
+
 func TestPlanGraphBuilder_forEach(t *testing.T) {
 	awsProvider := mockProviderWithResourceTypeSchema("aws_instance", simpleTestSchema())
 
@@ -227,7 +250,7 @@ func TestPlanGraphBuilder_forEach(t *testing.T) {
 const testPlanGraphBuilderStr = `
 aws_instance.web (expand)
   aws_security_group.firewall (expand)
-  var.foo
+  var.foo (expand, reference)
 aws_load_balancer.weblb (expand)
   aws_instance.web (expand)
 aws_security_group.firewall (expand)
@@ -250,6 +273,8 @@ root
   provider["registry.opentofu.org/hashicorp/aws"] (close)
   provider["registry.opentofu.org/hashicorp/openstack"] (close)
 var.foo
+var.foo (expand, reference)
+  var.foo
 `
 const testPlanGraphBuilderForEachStr = `
 aws_instance.bar (expand)

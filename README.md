@@ -1,14 +1,13 @@
 # OpenTofu
 
-- Manifesto: https://opentofu.org/manifesto
-- About the OpenTofu fork: https://opentofu.org/fork
+- [Manifesto](https://opentofu.org/manifesto)
+- [About the OpenTofu fork](https://opentofu.org/fork)
+- [How to install](https://opentofu.org/docs/intro/install)
 - [Join our Slack community!](https://opentofu.org/slack)
 - [Weekly OpenTofu Status Updates](WEEKLY_UPDATES.md)
 
 ![](https://raw.githubusercontent.com/opentofu/brand-artifacts/main/full/transparent/SVG/on-dark.svg#gh-dark-mode-only)
 ![](https://raw.githubusercontent.com/opentofu/brand-artifacts/main/full/transparent/SVG/on-light.svg#gh-light-mode-only)
-
-**Important Note: This repository is currently a work in progress while we're preparing it for the first stable release and fine-tuning the community contribution process. Please read the [announcement post](https://opentofu.org/fork) for important context and the [contributing docs](CONTRIBUTING.md) for instructions on how to contribute.**
 
 OpenTofu is an OSS tool for building, changing, and versioning infrastructure safely and efficiently. OpenTofu can manage existing and popular service providers as well as custom in-house solutions.
 
@@ -22,17 +21,27 @@ The key features of OpenTofu are:
 
 - **Change Automation**: Complex changesets can be applied to your infrastructure with minimal human interaction. With the previously mentioned execution plan and resource graph, you know exactly what OpenTofu will change and in what order, avoiding many possible human errors.
 
-## Developing OpenTofu
+## Getting help and contributing
 
-This repository contains OpenTofu Core, which includes the command line interface and the main graph engine.
+- Have a question? Post it in [GitHub Discussions](https://github.com/orgs/opentofu/discussions) or on the [OpenTofu Slack](https://opentofu.org/slack/)!
+- Want to contribute? Please read the [Contribution Guide](CONTRIBUTING.md).
+- Want to stay up to date? Read the [weekly updates](WEEKLY_UPDATES.md), [TSC summary](TSC_SUMMARY.md), or join the [community meetings](https://meet.google.com/xfm-cgms-has) on Wednesdays at 14:30 CET / 8:30 AM Eastern / 5:30 AM Western / 19:00 India time on this link: https://meet.google.com/xfm-cgms-has ([📅 calendar link](https://calendar.google.com/calendar/event?eid=NDg0aWl2Y3U1aHFva3N0bGhyMHBhNzdpZmsgY18zZjJkZDNjMWZlMGVmNGU5M2VmM2ZjNDU2Y2EyZGQyMTlhMmU4ZmQ4NWY2YjQwNzUwYWYxNmMzZGYzNzBiZjkzQGc))
 
-- To learn more about compiling OpenTofu and contributing suggested changes, refer to [the contributing guide](CONTRIBUTING.md).
-
-- To submit bug reports or enhancement requests, refer to the [contributing guide](CONTRIBUTING.md) as well.
+> [!TIP]
+> For more OpenTofu events, subscribe to the [OpenTofu Events Calendar](https://calendar.google.com/calendar/embed?src=c_3f2dd3c1fe0ef4e93ef3fc456ca2dd219a2e8fd85f6b40750af16c3df370bf93%40group.calendar.google.com)!
 
 ## Reporting security vulnerabilities
 If you've found a vulnerability or a potential vulnerability in OpenTofu please follow [Security Policy](https://github.com/opentofu/opentofu/security/policy). We'll send a confirmation email to acknowledge your report, and we'll send an additional email when we've identified the issue positively or negatively.
 
+## Reporting possible copyright issues
+
+If you believe you have found any possible copyright or intellectual property issues, please contact liaison@opentofu.org. We'll send a confirmation email to acknowledge your report.
+
+## Registry Access
+
+In an effort to comply with applicable sanctions, we block access from specific countries of origin.
+
 ## License
 
 [Mozilla Public License v2.0](https://github.com/opentofu/opentofu/blob/main/LICENSE)
+

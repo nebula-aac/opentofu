@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package cloud
@@ -209,12 +211,9 @@ func TestRemoteContextWithVars(t *testing.T) {
 				key := "key"
 				v.Key = &key
 			}
+			b.client.Variables.Create(context.TODO(), workspaceID, *v)
 
-			ctx := context.Background()
-
-			b.client.Variables.Create(ctx, workspaceID, *v)
-
-			_, _, diags := b.LocalRun(op)
+			_, _, diags := b.LocalRun(context.Background(), op)
 
 			if test.WantError != "" {
 				if !diags.HasErrors() {
@@ -226,8 +225,8 @@ func TestRemoteContextWithVars(t *testing.T) {
 				}
 				// When Context() returns an error, it should unlock the state,
 				// so re-locking it is expected to succeed.
-				stateMgr, _ := b.StateMgr(ctx, testBackendSingleWorkspaceName)
-				if _, err := stateMgr.Lock(ctx, statemgr.NewLockInfo()); err != nil {
+				stateMgr, _ := b.StateMgr(testBackendSingleWorkspaceName)
+				if _, err := stateMgr.Lock(statemgr.NewLockInfo()); err != nil {
 					t.Fatalf("unexpected error locking state: %s", err.Error())
 				}
 			} else {
@@ -235,8 +234,8 @@ func TestRemoteContextWithVars(t *testing.T) {
 					t.Fatalf("unexpected error\ngot:  %s\nwant: <no error>", diags.Err().Error())
 				}
 				// When Context() succeeds, this should fail w/ "workspace already locked"
-				stateMgr, _ := b.StateMgr(ctx, testBackendSingleWorkspaceName)
-				if _, err := stateMgr.Lock(ctx, statemgr.NewLockInfo()); err == nil {
+				stateMgr, _ := b.StateMgr(testBackendSingleWorkspaceName)
+				if _, err := stateMgr.Lock(statemgr.NewLockInfo()); err == nil {
 					t.Fatal("unexpected success locking state after Context")
 				}
 			}
@@ -431,20 +430,18 @@ func TestRemoteVariablesDoNotOverride(t *testing.T) {
 				Variables:    test.localVariables,
 			}
 
-			ctx := context.Background()
-
 			for _, v := range test.remoteVariables {
-				b.client.Variables.Create(ctx, workspaceID, *v)
+				b.client.Variables.Create(context.TODO(), workspaceID, *v)
 			}
 
-			lr, _, diags := b.LocalRun(op)
+			lr, _, diags := b.LocalRun(context.Background(), op)
 
 			if diags.HasErrors() {
 				t.Fatalf("unexpected error\ngot:  %s\nwant: <no error>", diags.Err().Error())
 			}
 			// When Context() succeeds, this should fail w/ "workspace already locked"
-			stateMgr, _ := b.StateMgr(ctx, testBackendSingleWorkspaceName)
-			if _, err := stateMgr.Lock(ctx, statemgr.NewLockInfo()); err == nil {
+			stateMgr, _ := b.StateMgr(testBackendSingleWorkspaceName)
+			if _, err := stateMgr.Lock(statemgr.NewLockInfo()); err == nil {
 				t.Fatal("unexpected success locking state after Context")
 			}
 

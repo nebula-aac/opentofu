@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ func (c *WorkspaceDeleteCommand) Run(args []string) int {
 	var stateLock bool
 	var stateLockTimeout time.Duration
 	cmdFlags := c.Meta.defaultFlagSet("workspace delete")
+	c.Meta.varFlagSet(cmdFlags)
 	cmdFlags.BoolVar(&force, "force", false, "force removal of a non-empty workspace")
 	cmdFlags.BoolVar(&stateLock, "lock", true, "lock state")
 	cmdFlags.DurationVar(&stateLockTimeout, "lock-timeout", 0, "lock timeout")
@@ -62,10 +64,18 @@ func (c *WorkspaceDeleteCommand) Run(args []string) int {
 		return 1
 	}
 
+	// Load the encryption configuration
+	enc, encDiags := c.EncryptionFromPath(configPath)
+	diags = diags.Append(encDiags)
+	if encDiags.HasErrors() {
+		c.showDiagnostics(diags)
+		return 1
+	}
+
 	// Load the backend
 	b, backendDiags := c.Backend(&BackendOpts{
 		Config: backendConfig,
-	})
+	}, enc.State())
 	diags = diags.Append(backendDiags)
 	if backendDiags.HasErrors() {
 		c.showDiagnostics(diags)
@@ -75,9 +85,7 @@ func (c *WorkspaceDeleteCommand) Run(args []string) int {
 	// This command will not write state
 	c.ignoreRemoteVersionConflict(b)
 
-	ctx := context.TODO()
-
-	workspaces, err := b.Workspaces(ctx)
+	workspaces, err := b.Workspaces()
 	if err != nil {
 		c.Ui.Error(err.Error())
 		return 1
@@ -108,7 +116,7 @@ func (c *WorkspaceDeleteCommand) Run(args []string) int {
 	}
 
 	// we need the actual state to see if it's empty
-	stateMgr, err := b.StateMgr(ctx, workspace)
+	stateMgr, err := b.StateMgr(workspace)
 	if err != nil {
 		c.Ui.Error(err.Error())
 		return 1
@@ -125,7 +133,7 @@ func (c *WorkspaceDeleteCommand) Run(args []string) int {
 		stateLocker = clistate.NewNoopLocker()
 	}
 
-	if err := stateMgr.RefreshState(ctx); err != nil {
+	if err := stateMgr.RefreshState(); err != nil {
 		// We need to release the lock before exit
 		stateLocker.Unlock()
 		c.Ui.Error(err.Error())
@@ -172,7 +180,7 @@ func (c *WorkspaceDeleteCommand) Run(args []string) int {
 	// be delegated from the Backend to the State itself.
 	stateLocker.Unlock()
 
-	err = b.DeleteWorkspace(ctx, workspace, force)
+	err = b.DeleteWorkspace(workspace, force)
 	if err != nil {
 		c.Ui.Error(err.Error())
 		return 1
@@ -210,7 +218,7 @@ func (c *WorkspaceDeleteCommand) AutocompleteFlags() complete.Flags {
 
 func (c *WorkspaceDeleteCommand) Help() string {
 	helpText := `
-Usage: tofu [global options] workspace delete [OPTIONS] NAME
+Usage: tofu [global options] workspace delete [options] NAME
 
   Delete a OpenTofu workspace
 
@@ -226,6 +234,15 @@ Options:
                      against the same workspace.
 
   -lock-timeout=0s   Duration to retry a state lock.
+
+  -var 'foo=bar'     Set a value for one of the input variables in the root
+                     module of the configuration. Use this option more than
+                     once to set more than one variable.
+
+  -var-file=filename Load variable values from the given file, in addition
+                     to the default files terraform.tfvars and *.auto.tfvars.
+                     Use this option more than once to include more than one
+                     variables file.
 
 `
 	return strings.TrimSpace(helpText)

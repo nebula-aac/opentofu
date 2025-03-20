@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -45,10 +47,6 @@ type nodeExpandPlannableResource struct {
 	// structure in the future, as we need to compare for equality and take the
 	// union of multiple groups of dependencies.
 	dependencies []addrs.ConfigResource
-
-	// legacyImportMode is set if the graph is being constructed following an
-	// invocation of the legacy "tofu import" CLI command.
-	legacyImportMode bool
 }
 
 var (
@@ -130,6 +128,7 @@ func (n *nodeExpandPlannableResource) DynamicExpand(ctx EvalContext) (*Graph, er
 		// Add the config and state since we don't do that via transforms
 		a.Config = n.Config
 		a.ResolvedProvider = n.ResolvedProvider
+		// ResolvedProviderKey set in AttachResourceState
 		a.Schema = n.Schema
 		a.ProvisionerSchemas = n.ProvisionerSchemas
 		a.ProviderMetas = n.ProviderMetas
@@ -152,6 +151,22 @@ func (n *nodeExpandPlannableResource) DynamicExpand(ctx EvalContext) (*Graph, er
 		}
 	}
 
+	// Resolve addresses and IDs of all import targets that originate from import blocks
+	// We do it here before expanding the resources in the modules, to avoid running this resolution multiple times
+	importResolver := ctx.ImportResolver()
+	var diags tfdiags.Diagnostics
+	for _, importTarget := range n.importTargets {
+		// If the import target originates from the import command (instead of the import block), we don't need to
+		// resolve the import as it's already in the resolved form
+		// In addition, if PreDestroyRefresh is true, we know we are running as part of a refresh plan, immediately before a destroy
+		// plan. In the destroy plan mode, import blocks are not relevant, that's why we skip resolving imports
+		skipImports := importTarget.IsFromImportBlock() && !n.preDestroyRefresh
+		if skipImports {
+			err := importResolver.ExpandAndResolveImport(importTarget, ctx)
+			diags = diags.Append(err)
+		}
+	}
+
 	// The above dealt with the expansion of the containing module, so now
 	// we need to deal with the expansion of the resource itself across all
 	// instances of the module.
@@ -159,7 +174,6 @@ func (n *nodeExpandPlannableResource) DynamicExpand(ctx EvalContext) (*Graph, er
 	// We'll gather up all of the leaf instances we learn about along the way
 	// so that we can inform the checks subsystem of which instances it should
 	// be expecting check results for, below.
-	var diags tfdiags.Diagnostics
 	instAddrs := addrs.MakeSet[addrs.Checkable]()
 	for _, module := range moduleInstances {
 		resAddr := n.Addr.Resource.Absolute(module)
@@ -304,6 +318,14 @@ func (n *nodeExpandPlannableResource) expandResourceInstances(globalCtx EvalCont
 func (n *nodeExpandPlannableResource) resourceInstanceSubgraph(ctx EvalContext, addr addrs.AbsResource, instanceAddrs []addrs.AbsResourceInstance) (*Graph, error) {
 	var diags tfdiags.Diagnostics
 
+	var commandLineImportTargets []CommandLineImportTarget
+
+	for _, importTarget := range n.importTargets {
+		if importTarget.IsFromImportCommandLine() {
+			commandLineImportTargets = append(commandLineImportTargets, *importTarget.CommandLineImportTarget)
+		}
+	}
+
 	// Our graph transformers require access to the full state, so we'll
 	// temporarily lock it while we work on this.
 	state := ctx.State().Lock()
@@ -313,27 +335,17 @@ func (n *nodeExpandPlannableResource) resourceInstanceSubgraph(ctx EvalContext, 
 	concreteResource := func(a *NodeAbstractResourceInstance) dag.Vertex {
 		var m *NodePlannableResourceInstance
 
-		// If we're in legacy import mode (the import CLI command), we only need
+		// If we're in the `tofu import` CLI command, we only need
 		// to return the import node, not a plannable resource node.
-		if n.legacyImportMode {
-			for _, importTarget := range n.importTargets {
-				if importTarget.Addr.Equal(a.Addr) {
-
-					// The import ID was supplied as a string on the command
-					// line and made into a synthetic HCL expression.
-					importId, diags := evaluateImportIdExpression(importTarget.ID, ctx)
-					if diags.HasErrors() {
-						// This should be impossible, because the import command
-						// arg parsing builds the synth expression from a
-						// non-null string.
-						panic(fmt.Sprintf("Invalid import id: %s. This is a bug in OpenTofu; please report it!", diags.Err()))
-					}
-
-					return &graphNodeImportState{
-						Addr:             importTarget.Addr,
-						ID:               importId,
-						ResolvedProvider: n.ResolvedProvider,
-					}
+		for _, c := range commandLineImportTargets {
+			if c.Addr.Equal(a.Addr) {
+				return &graphNodeImportState{
+					Addr:             c.Addr,
+					ID:               c.ID,
+					ResolvedProvider: n.ResolvedProvider,
+					Schema:           n.Schema,
+					SchemaVersion:    n.SchemaVersion,
+					Config:           n.Config,
 				}
 			}
 		}
@@ -361,16 +373,9 @@ func (n *nodeExpandPlannableResource) resourceInstanceSubgraph(ctx EvalContext, 
 			forceReplace:             n.forceReplace,
 		}
 
-		for _, importTarget := range n.importTargets {
-			if importTarget.Addr.Equal(a.Addr) {
-				// If we get here, we're definitely not in legacy import mode,
-				// so go ahead and plan the resource changes including import.
-				m.importTarget = ImportTarget{
-					ID:     importTarget.ID,
-					Addr:   importTarget.Addr,
-					Config: importTarget.Config,
-				}
-			}
+		resolvedImportTarget := ctx.ImportResolver().GetImport(a.Addr)
+		if resolvedImportTarget != nil {
+			m.importTarget = *resolvedImportTarget
 		}
 
 		return m
@@ -381,6 +386,7 @@ func (n *nodeExpandPlannableResource) resourceInstanceSubgraph(ctx EvalContext, 
 		// Add the config and state since we don't do that via transforms
 		a.Config = n.Config
 		a.ResolvedProvider = n.ResolvedProvider
+		// ResolvedProviderKey will be set during AttachResourceState
 		a.Schema = n.Schema
 		a.ProvisionerSchemas = n.ProvisionerSchemas
 		a.ProviderMetas = n.ProviderMetas
@@ -414,7 +420,7 @@ func (n *nodeExpandPlannableResource) resourceInstanceSubgraph(ctx EvalContext, 
 		&AttachStateTransformer{State: state},
 
 		// Targeting
-		&TargetsTransformer{Targets: n.Targets},
+		&TargetingTransformer{Targets: n.Targets, Excludes: n.Excludes},
 
 		// Connect references so ordering is correct
 		&ReferenceTransformer{},
@@ -428,6 +434,6 @@ func (n *nodeExpandPlannableResource) resourceInstanceSubgraph(ctx EvalContext, 
 		Steps: steps,
 		Name:  "nodeExpandPlannableResource",
 	}
-	graph, diags := b.Build(addr.Module)
-	return graph, diags.ErrWithWarnings()
+	graph, graphDiags := b.Build(addr.Module)
+	return graph, diags.Append(graphDiags).ErrWithWarnings()
 }

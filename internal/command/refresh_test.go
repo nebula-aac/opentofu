@@ -1,11 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/opentofu/opentofu/internal/addrs"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/providers"
 	"github.com/opentofu/opentofu/internal/states"
 	"github.com/opentofu/opentofu/internal/states/statefile"
@@ -74,7 +76,7 @@ func TestRefresh(t *testing.T) {
 		t.Fatalf("err: %s", err)
 	}
 
-	newStateFile, err := statefile.Read(f)
+	newStateFile, err := statefile.Read(f, encryption.StateEncryptionDisabled())
 	f.Close()
 	if err != nil {
 		t.Fatalf("err: %s", err)
@@ -217,7 +219,7 @@ func TestRefresh_cwd(t *testing.T) {
 		t.Fatalf("err: %s", err)
 	}
 
-	newStateFile, err := statefile.Read(f)
+	newStateFile, err := statefile.Read(f, encryption.StateEncryptionDisabled())
 	f.Close()
 	if err != nil {
 		t.Fatalf("err: %s", err)
@@ -242,8 +244,8 @@ func TestRefresh_defaultState(t *testing.T) {
 	// default filename.
 	statePath := testStateFile(t, originalState)
 
-	localState := statemgr.NewFilesystem(statePath)
-	if err := localState.RefreshState(context.Background()); err != nil {
+	localState := statemgr.NewFilesystem(statePath, encryption.StateEncryptionDisabled())
+	if err := localState.RefreshState(); err != nil {
 		t.Fatal(err)
 	}
 	s := localState.State()
@@ -296,7 +298,7 @@ func TestRefresh_defaultState(t *testing.T) {
 	actual := newState.RootModule().Resources["test_instance.foo"].Instances[addrs.NoKey].Current
 	expected := &states.ResourceInstanceObjectSrc{
 		Status:       states.ObjectReady,
-		AttrsJSON:    []byte("{\n            \"ami\": null,\n            \"id\": \"yes\"\n          }"),
+		AttrsJSON:    []byte(`{"ami":null,"id":"yes"}`),
 		Dependencies: []addrs.ConfigResource{},
 	}
 	if !reflect.DeepEqual(actual, expected) {
@@ -366,7 +368,7 @@ func TestRefresh_outPath(t *testing.T) {
 	actual := newState.RootModule().Resources["test_instance.foo"].Instances[addrs.NoKey].Current
 	expected := &states.ResourceInstanceObjectSrc{
 		Status:       states.ObjectReady,
-		AttrsJSON:    []byte("{\n            \"ami\": null,\n            \"id\": \"yes\"\n          }"),
+		AttrsJSON:    []byte(`{"ami":null,"id":"yes"}`),
 		Dependencies: []addrs.ConfigResource{},
 	}
 	if !reflect.DeepEqual(actual, expected) {
@@ -568,7 +570,7 @@ func TestRefresh_backup(t *testing.T) {
 
 	// Need to put some state content in the output file so that there's
 	// something to back up.
-	err = statefile.Write(statefile.New(state, "baz", 0), outf)
+	err = statefile.Write(statefile.New(state, "baz", 0), outf, encryption.StateEncryptionDisabled())
 	if err != nil {
 		t.Fatalf("error writing initial output state file %s", err)
 	}
@@ -619,7 +621,7 @@ func TestRefresh_backup(t *testing.T) {
 	actual := newState.RootModule().Resources["test_instance.foo"].Instances[addrs.NoKey].Current
 	expected := &states.ResourceInstanceObjectSrc{
 		Status:       states.ObjectReady,
-		AttrsJSON:    []byte("{\n            \"ami\": null,\n            \"id\": \"changed\"\n          }"),
+		AttrsJSON:    []byte(`{"ami":null,"id":"changed"}`),
 		Dependencies: []addrs.ConfigResource{},
 	}
 	if !reflect.DeepEqual(actual, expected) {
@@ -691,7 +693,7 @@ func TestRefresh_disableBackup(t *testing.T) {
 	actual := newState.RootModule().Resources["test_instance.foo"].Instances[addrs.NoKey].Current
 	expected := &states.ResourceInstanceObjectSrc{
 		Status:       states.ObjectReady,
-		AttrsJSON:    []byte("{\n            \"ami\": null,\n            \"id\": \"yes\"\n          }"),
+		AttrsJSON:    []byte(`{"ami":null,"id":"yes"}`),
 		Dependencies: []addrs.ConfigResource{},
 	}
 	if !reflect.DeepEqual(actual, expected) {
@@ -842,6 +844,100 @@ func TestRefresh_targetFlagsDiags(t *testing.T) {
 			got := output.Stderr()
 			if !strings.Contains(got, target) {
 				t.Fatalf("bad error output, want %q, got:\n%s", target, got)
+			}
+			if !strings.Contains(got, wantDiag) {
+				t.Fatalf("bad error output, want %q, got:\n%s", wantDiag, got)
+			}
+		})
+	}
+}
+
+// Config with multiple resources, targeted refresh with exclude
+func TestRefresh_excluded(t *testing.T) {
+	td := t.TempDir()
+	testCopyDir(t, testFixturePath("refresh-targeted"), td)
+	defer testChdir(t, td)()
+
+	state := testState()
+	statePath := testStateFile(t, state)
+
+	p := testProvider()
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
+			"test_instance": {
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"id": {Type: cty.String, Computed: true},
+					},
+				},
+			},
+		},
+	}
+	p.PlanResourceChangeFn = func(req providers.PlanResourceChangeRequest) providers.PlanResourceChangeResponse {
+		return providers.PlanResourceChangeResponse{
+			PlannedState: req.ProposedNewState,
+		}
+	}
+
+	view, done := testView(t)
+	c := &RefreshCommand{
+		Meta: Meta{
+			testingOverrides: metaOverridesForProvider(p),
+			View:             view,
+		},
+	}
+
+	args := []string{
+		"-exclude", "test_instance.bar",
+		"-state", statePath,
+	}
+	code := c.Run(args)
+	output := done(t)
+	if code != 0 {
+		t.Fatalf("bad: %d\n\n%s", code, output.Stderr())
+	}
+
+	got := output.Stdout()
+	if want := "test_instance.foo: Refreshing"; !strings.Contains(got, want) {
+		t.Fatalf("expected output to contain %q, got:\n%s", want, got)
+	}
+	if doNotWant := "test_instance.bar: Refreshing"; strings.Contains(got, doNotWant) {
+		t.Fatalf("expected output not to contain %q, got:\n%s", doNotWant, got)
+	}
+}
+
+// Diagnostics for invalid -exclude flags
+func TestRefresh_excludeFlagsDiags(t *testing.T) {
+	testCases := map[string]string{
+		"test_instance.": "Dot must be followed by attribute name.",
+		"test_instance":  "Resource specification must include a resource type and name.",
+	}
+
+	for exclude, wantDiag := range testCases {
+		t.Run(exclude, func(t *testing.T) {
+			td := testTempDir(t)
+			defer os.RemoveAll(td)
+			defer testChdir(t, td)()
+
+			view, done := testView(t)
+			c := &RefreshCommand{
+				Meta: Meta{
+					View: view,
+				},
+			}
+
+			args := []string{
+				"-exclude", exclude,
+			}
+			code := c.Run(args)
+			output := done(t)
+			if code != 1 {
+				t.Fatalf("bad: %d\n\n%s", code, output.Stderr())
+			}
+
+			got := output.Stderr()
+			if !strings.Contains(got, exclude) {
+				t.Fatalf("bad error output, want %q, got:\n%s", exclude, got)
 			}
 			if !strings.Contains(got, wantDiag) {
 				t.Fatalf("bad error output, want %q, got:\n%s", wantDiag, got)

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package backend
@@ -132,7 +134,7 @@ func ParseDeclaredVariableValues(vv map[string]UnparsedVariableValue, decls map[
 	return ret, diags
 }
 
-// Checks all given tofu.InputValues variable maps for the existance of
+// Checks all given tofu.InputValues variable maps for the existence of
 // a named variable
 func isDefinedAny(name string, maps ...tofu.InputValues) bool {
 	for _, m := range maps {

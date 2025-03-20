@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -44,6 +46,11 @@ func (n *NodePlanDestroyableResourceInstance) DestroyAddr() *addrs.AbsResourceIn
 // GraphNodeEvalable
 func (n *NodePlanDestroyableResourceInstance) Execute(ctx EvalContext, op walkOperation) (diags tfdiags.Diagnostics) {
 	addr := n.ResourceInstanceAddr()
+
+	diags = diags.Append(n.resolveProvider(ctx, false, states.NotDeposed))
+	if diags.HasErrors() {
+		return diags
+	}
 
 	switch addr.Resource.Resource.Mode {
 	case addrs.ManagedResourceMode:
@@ -96,12 +103,12 @@ func (n *NodePlanDestroyableResourceInstance) managedResourceExecute(ctx EvalCon
 		return diags
 	}
 
-	diags = diags.Append(n.checkPreventDestroy(change))
+	diags = diags.Append(n.writeChange(ctx, change, ""))
 	if diags.HasErrors() {
 		return diags
 	}
 
-	diags = diags.Append(n.writeChange(ctx, change, ""))
+	diags = diags.Append(n.checkPreventDestroy(change))
 	return diags
 }
 
@@ -119,7 +126,7 @@ func (n *NodePlanDestroyableResourceInstance) dataResourceExecute(ctx EvalContex
 			Before: cty.NullVal(cty.DynamicPseudoType),
 			After:  cty.NullVal(cty.DynamicPseudoType),
 		},
-		ProviderAddr: n.ResolvedProvider,
+		ProviderAddr: n.ResolvedProvider.ProviderConfig,
 	}
 	return diags.Append(n.writeChange(ctx, change, ""))
 }

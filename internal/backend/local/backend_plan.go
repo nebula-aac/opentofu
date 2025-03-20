@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package local
@@ -29,6 +31,15 @@ func (b *Local) opPlan(
 	log.Printf("[INFO] backend/local: starting Plan operation")
 
 	var diags tfdiags.Diagnostics
+
+	// For the moment we have a bit of a tangled mess of context.Context here, for
+	// historical reasons. Hopefully we'll clean this up one day, but here's the
+	// guide for now:
+	// - ctx is used only for its values, and should be connected to the top-level ctx
+	//   from "package main" so that we can obtain telemetry objects, etc from it.
+	// - stopCtx is cancelled to trigger a graceful shutdown.
+	// - cancelCtx is cancelled for a graceless shutdown.
+	ctx := context.WithoutCancel(stopCtx)
 
 	if op.PlanFile != nil {
 		diags = diags.Append(tfdiags.Sourceless(
@@ -77,13 +88,13 @@ func (b *Local) opPlan(
 	}
 
 	// Get our context
-	lr, configSnap, opState, ctxDiags := b.localRun(op)
+	lr, configSnap, opState, ctxDiags := b.localRun(ctx, op)
 	diags = diags.Append(ctxDiags)
 	if ctxDiags.HasErrors() {
 		op.ReportResult(runningOp, diags)
 		return
 	}
-	// the state was locked during succesfull context creation; unlock the state
+	// the state was locked during successful context creation; unlock the state
 	// when the operation completes
 	defer func() {
 		diags := op.StateLocker.Unlock()
@@ -101,11 +112,12 @@ func (b *Local) opPlan(
 	var plan *plans.Plan
 	var planDiags tfdiags.Diagnostics
 	doneCh := make(chan struct{})
+	panicHandler := logging.PanicHandlerWithTraceFn()
 	go func() {
-		defer logging.PanicHandler()
+		defer panicHandler()
 		defer close(doneCh)
 		log.Printf("[INFO] backend/local: plan calling Plan")
-		plan, planDiags = lr.Core.Plan(lr.Config, lr.InputState, lr.PlanOpts)
+		plan, planDiags = lr.Core.Plan(ctx, lr.Config, lr.InputState, lr.PlanOpts)
 	}()
 
 	if b.opWait(doneCh, stopCtx, cancelCtx, lr.Core, opState, op.View) {
@@ -170,7 +182,7 @@ func (b *Local) opPlan(
 			StateFile:            plannedStateFile,
 			Plan:                 plan,
 			DependencyLocks:      op.DependencyLocks,
-		})
+		}, op.Encryption.Plan())
 		if err != nil {
 			diags = diags.Append(tfdiags.Sourceless(
 				tfdiags.Error,

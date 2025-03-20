@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -117,6 +119,36 @@ func TestNodeApplyableOutputExecute_sensitiveValueNotOutput(t *testing.T) {
 	}
 	if got, want := diags.Err().Error(), "Output refers to sensitive values"; !strings.Contains(got, want) {
 		t.Errorf("expected error to include %q, but was: %s", want, got)
+	}
+}
+
+func TestNodeApplyableOutputExecute_alternativelyMarkedValue(t *testing.T) {
+	ctx := new(MockEvalContext)
+	ctx.StateState = states.NewState().SyncWrapper()
+	ctx.ChecksState = checks.NewState(nil)
+
+	config := &configs.Output{Name: "map-output"}
+	addr := addrs.OutputValue{Name: config.Name}.Absolute(addrs.RootModuleInstance)
+	node := &NodeApplyableOutput{Config: config, Addr: addr}
+	val := cty.MapVal(map[string]cty.Value{
+		"a": cty.StringVal("b").Mark("alternative-mark"),
+	})
+	ctx.EvaluateExprResult = val
+
+	diags := node.Execute(ctx, walkApply)
+	if diags.HasErrors() {
+		t.Fatalf("Got unexpected error: %v", diags)
+	}
+
+	modOutputAddr, diags := addrs.ParseAbsOutputValueStr("output.map-output")
+	if diags.HasErrors() {
+		t.Fatalf("Invalid mod addr in test: %v", diags)
+	}
+
+	stateVal := ctx.StateState.OutputValue(modOutputAddr)
+
+	if !stateVal.Value.HasMark("alternative-mark") {
+		t.Fatalf("Non-sensitive mark has been erased")
 	}
 }
 

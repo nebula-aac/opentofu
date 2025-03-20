@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package experiments
@@ -81,7 +83,7 @@ func (e Experiment) IsConcluded() bool {
 var currentExperiments = make(Set)
 
 // concludedExperiments are those which were available to activate in an earlier
-// version of Terraform but are no longer available, either because the feature
+// version of OpenTofu but are no longer available, either because the feature
 // in question has been implemented or because the experiment failed and the
 // feature was abandoned. Each experiment maps to a message describing the
 // outcome, so we can give users feedback about what they might do in modules
@@ -89,7 +91,7 @@ var currentExperiments = make(Set)
 //
 // After an experiment has been concluded for a whole major release span it can
 // be removed, since we expect users to perform upgrades one major release at
-// at time without skipping and thus they will see the concludedness error
+// a time without skipping and thus they will see the concludedness error
 // message as they upgrade through a prior major version.
 //
 // Members of this map are registered in the init function above.

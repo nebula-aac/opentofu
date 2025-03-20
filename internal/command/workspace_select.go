@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -25,6 +26,7 @@ func (c *WorkspaceSelectCommand) Run(args []string) int {
 
 	var orCreate bool
 	cmdFlags := c.Meta.defaultFlagSet("workspace select")
+	c.Meta.varFlagSet(cmdFlags)
 	cmdFlags.BoolVar(&orCreate, "or-create", false, "create workspace if it does not exist")
 	cmdFlags.Usage = func() { c.Ui.Error(c.Help()) }
 	if err := cmdFlags.Parse(args); err != nil {
@@ -59,18 +61,21 @@ func (c *WorkspaceSelectCommand) Run(args []string) int {
 		return 1
 	}
 
-	// Load the backend
-	b, backendDiags := c.Backend(&BackendOpts{
-		Config: backendConfig,
-	})
-	diags = diags.Append(backendDiags)
-	if backendDiags.HasErrors() {
+	// Load the encryption configuration
+	enc, encDiags := c.EncryptionFromPath(configPath)
+	diags = diags.Append(encDiags)
+	if encDiags.HasErrors() {
 		c.showDiagnostics(diags)
 		return 1
 	}
 
-	if err != nil {
-		c.Ui.Error(fmt.Sprintf("Failed to load backend: %s", err))
+	// Load the backend
+	b, backendDiags := c.Backend(&BackendOpts{
+		Config: backendConfig,
+	}, enc.State())
+	diags = diags.Append(backendDiags)
+	if backendDiags.HasErrors() {
+		c.showDiagnostics(diags)
 		return 1
 	}
 
@@ -83,9 +88,7 @@ func (c *WorkspaceSelectCommand) Run(args []string) int {
 		return 1
 	}
 
-	ctx := context.TODO()
-
-	states, err := b.Workspaces(ctx)
+	states, err := b.Workspaces()
 	if err != nil {
 		c.Ui.Error(err.Error())
 		return 1
@@ -108,7 +111,7 @@ func (c *WorkspaceSelectCommand) Run(args []string) int {
 
 	if !found {
 		if orCreate {
-			_, err = b.StateMgr(ctx, name)
+			_, err = b.StateMgr(name)
 			if err != nil {
 				c.Ui.Error(err.Error())
 				return 1
@@ -153,7 +156,7 @@ func (c *WorkspaceSelectCommand) AutocompleteFlags() complete.Flags {
 
 func (c *WorkspaceSelectCommand) Help() string {
 	helpText := `
-Usage: tofu [global options] workspace select NAME
+Usage: tofu [global options] workspace select [options] NAME
 
   Select a different OpenTofu workspace.
 
@@ -161,6 +164,14 @@ Options:
 
     -or-create=false    Create the OpenTofu workspace if it doesn't exist.
 
+    -var 'foo=bar'      Set a value for one of the input variables in the root
+                        module of the configuration. Use this option more than
+                        once to set more than one variable.
+
+    -var-file=filename  Load variable values from the given file, in addition
+                        to the default files terraform.tfvars and *.auto.tfvars.
+                        Use this option more than once to include more than one
+                        variables file.
 `
 	return strings.TrimSpace(helpText)
 }

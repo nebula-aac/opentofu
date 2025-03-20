@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -44,7 +46,7 @@ type GraphNodeCreator interface {
 type DestroyEdgeTransformer struct {
 	// FIXME: GraphNodeCreators are not always applying changes, and should not
 	// participate in the destroy graph if there are no operations which could
-	// interract with destroy nodes. We need Changes for now to detect the
+	// interact with destroy nodes. We need Changes for now to detect the
 	// action type, but perhaps this should be indicated somehow by the
 	// DiffTransformer which was intended to be the only transformer operating
 	// from the change set.
@@ -99,19 +101,14 @@ func (t *DestroyEdgeTransformer) tryInterProviderDestroyEdge(g *Graph, from, to 
 	// description of the provider being used to help determine if 2 nodes are
 	// from the same provider instance.
 	getComparableProvider := func(pc GraphNodeProviderConsumer) string {
-		ps := pc.Provider().String()
-
-		// we don't care about `exact` here, since we're only looking for any
-		// clue that the providers may differ.
-		p, _ := pc.ProvidedBy()
-		switch p := p.(type) {
+		p := pc.ProvidedBy()
+		switch p := p.ProviderConfig.(type) {
 		case addrs.AbsProviderConfig:
-			ps = p.String()
+			return p.String()
 		case addrs.LocalProviderConfig:
-			ps = p.String()
+			return p.String()
 		}
-
-		return ps
+		return pc.Provider().String()
 	}
 
 	pc, ok := from.(GraphNodeProviderConsumer)
@@ -357,10 +354,14 @@ func (t *pruneUnusedNodesTransformer) Transform(g *Graph) error {
 					// earlier, however there may be more to prune now based on
 					// targeting or a destroy with no related instances in the
 					// state.
+					// TODO: consider replacing this with an actual "references" check instead of the simple type check below.
+					// Due to provider functions, many provider references through GraphNodeReferencer still are required.
 					des, _ := g.Descendents(n)
 					for _, v := range des {
 						switch v.(type) {
 						case GraphNodeProviderConsumer:
+							return
+						case GraphNodeReferencer:
 							return
 						}
 					}

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package getproviders
@@ -30,7 +32,7 @@ func SearchLocalDirectory(baseDir string) (map[addrs.Provider]PackageMetaList, e
 	// an infinite loop, but as a measure of pragmatism we'll allow the
 	// top-level location itself to be a symlink, so that a user can
 	// potentially keep their plugins in a non-standard location but use a
-	// symlink to help Terraform find them anyway.
+	// symlink to help OpenTofu find them anyway.
 	originalBaseDir := baseDir
 	if finalDir, err := filepath.EvalSymlinks(baseDir); err == nil {
 		if finalDir != filepath.Clean(baseDir) {

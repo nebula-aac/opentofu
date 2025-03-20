@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package cloud
@@ -38,7 +40,7 @@ func TestCloud_showMissingRun(t *testing.T) {
 	mockSROWorkspace(t, b, testBackendSingleWorkspaceName)
 
 	absentRunID := "run-WwwwXxxxYyyyZzzz"
-	_, err := b.ShowPlanForRun(context.Background(), absentRunID, "app.terraform.io", true)
+	_, err := b.ShowPlanForRun(context.Background(), absentRunID, tfeHost, true)
 	if !strings.Contains(err.Error(), "tofu login") {
 		t.Fatalf("expected error message to suggest checking your login status, instead got: %s", err)
 	}
@@ -57,7 +59,7 @@ func TestCloud_showMissingUnredactedJson(t *testing.T) {
 		t.Fatalf("failed to init test data: %s", err)
 	}
 	// Showing the human-formatted plan should still work as expected!
-	redacted, err := b.ShowPlanForRun(ctx, runID, "app.terraform.io", true)
+	redacted, err := b.ShowPlanForRun(ctx, runID, tfeHost, true)
 	if err != nil {
 		t.Fatalf("failed to show plan for human, even though redacted json should be present: %s", err)
 	}
@@ -80,7 +82,7 @@ func TestCloud_showMissingUnredactedJson(t *testing.T) {
 	}
 
 	// But show -json should result in a special error.
-	_, err = b.ShowPlanForRun(ctx, runID, "app.terraform.io", false)
+	_, err = b.ShowPlanForRun(ctx, runID, tfeHost, false)
 	if err == nil {
 		t.Fatalf("unexpected success: reading unredacted json without admin permissions should have errored")
 	}
@@ -102,7 +104,7 @@ func TestCloud_showIncludesUnredactedJson(t *testing.T) {
 		t.Fatalf("failed to init test data: %s", err)
 	}
 	// Showing the human-formatted plan should work as expected:
-	redacted, err := b.ShowPlanForRun(ctx, runID, "app.terraform.io", true)
+	redacted, err := b.ShowPlanForRun(ctx, runID, tfeHost, true)
 	if err != nil {
 		t.Fatalf("failed to show plan for human, even though redacted json should be present: %s", err)
 	}
@@ -110,7 +112,7 @@ func TestCloud_showIncludesUnredactedJson(t *testing.T) {
 		t.Fatalf("show for human doesn't include expected redacted json content")
 	}
 	// Showing the external json plan format should work as expected:
-	unredacted, err := b.ShowPlanForRun(ctx, runID, "app.terraform.io", false)
+	unredacted, err := b.ShowPlanForRun(ctx, runID, tfeHost, false)
 	if err != nil {
 		t.Fatalf("failed to show plan for robot, even though unredacted json should be present: %s", err)
 	}
@@ -131,7 +133,7 @@ func TestCloud_showNoChanges(t *testing.T) {
 		t.Fatalf("failed to init test data: %s", err)
 	}
 	// Showing the human-formatted plan should work as expected:
-	redacted, err := b.ShowPlanForRun(ctx, runID, "app.terraform.io", true)
+	redacted, err := b.ShowPlanForRun(ctx, runID, tfeHost, true)
 	if err != nil {
 		t.Fatalf("failed to show plan for human, even though redacted json should be present: %s", err)
 	}
@@ -163,7 +165,7 @@ func TestCloud_showFooterNotConfirmable(t *testing.T) {
 	mc.Runs.Runs[runID].Actions.IsConfirmable = false
 
 	// Showing the human-formatted plan should work as expected:
-	redacted, err := b.ShowPlanForRun(ctx, runID, "app.terraform.io", true)
+	redacted, err := b.ShowPlanForRun(ctx, runID, tfeHost, true)
 	if err != nil {
 		t.Fatalf("failed to show plan for human, even though redacted json should be present: %s", err)
 	}

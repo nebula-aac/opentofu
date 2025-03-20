@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package arguments
@@ -29,6 +31,9 @@ type Apply struct {
 
 	// ViewType specifies which output format to use
 	ViewType ViewType
+
+	// ShowSensitive is used to display the value of variables marked as sensitive.
+	ShowSensitive bool
 }
 
 // ParseApply processes CLI arguments, returning an Apply value and errors.
@@ -45,6 +50,7 @@ func ParseApply(args []string) (*Apply, tfdiags.Diagnostics) {
 	cmdFlags := extendedFlagSet("apply", apply.State, apply.Operation, apply.Vars)
 	cmdFlags.BoolVar(&apply.AutoApprove, "auto-approve", false, "auto-approve")
 	cmdFlags.BoolVar(&apply.InputEnabled, "input", true, "input")
+	cmdFlags.BoolVar(&apply.ShowSensitive, "show-sensitive", false, "displays sensitive values")
 
 	var json bool
 	cmdFlags.BoolVar(&json, "json", false, "json")

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package configschema
@@ -128,7 +130,7 @@ func (a *Attribute) internalValidate(name, prefix string) error {
 
 	if a.Type != cty.NilType {
 		if a.NestedType != nil {
-			err = multierror.Append(fmt.Errorf("%s: Type and NestedType cannot both be set", name))
+			err = multierror.Append(err, fmt.Errorf("%s: Type and NestedType cannot both be set", name))
 		}
 	}
 

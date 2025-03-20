@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -34,6 +36,10 @@ import (
 	uuid "github.com/hashicorp/go-uuid"
 	"golang.org/x/oauth2"
 )
+
+// This is HashiCorp's cloud host.
+// There are a few special circumstances that depend on this whitelisted hostname.
+const tfeHost = "app.terraform.io"
 
 // LoginCommand is a Command implementation that runs an interactive login
 // flow for a remote service host. It then stashes credentials in a tfrc
@@ -187,7 +193,7 @@ func (c *LoginCommand) Run(args []string) int {
 		case clientConfig.SupportedGrantTypes.Has(disco.OAuthAuthzCodeGrant):
 			// We prefer an OAuth code grant if the server supports it.
 			oauthToken, tokenDiags = c.interactiveGetTokenByCode(hostname, credsCtx, clientConfig)
-		case clientConfig.SupportedGrantTypes.Has(disco.OAuthOwnerPasswordGrant) && hostname == svchost.Hostname("app.terraform.io"):
+		case clientConfig.SupportedGrantTypes.Has(disco.OAuthOwnerPasswordGrant) && hostname == svchost.Hostname(tfeHost):
 			// The password grant type is allowed only for Terraform Cloud SaaS.
 			// Note this case is purely theoretical at this point, as TFC currently uses
 			// its own bespoke login protocol (tfe)
@@ -227,7 +233,7 @@ func (c *LoginCommand) Run(args []string) int {
 	}
 
 	c.Ui.Output("\n---------------------------------------------------------------------------------\n")
-	if hostname == "app.terraform.io" { // Terraform Cloud
+	if hostname == tfeHost { // Terraform Cloud
 		var motd struct {
 			Message string        `json:"msg"`
 			Errors  []interface{} `json:"errors"`
@@ -363,7 +369,6 @@ func (c *LoginCommand) defaultOutputFile() string {
 
 func (c *LoginCommand) interactiveGetTokenByCode(hostname svchost.Hostname, credsCtx *loginCredentialsContext, clientConfig *disco.OAuthClient) (*oauth2.Token, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
-
 	confirm, confirmDiags := c.interactiveContextConsent(hostname, disco.OAuthAuthzCodeGrant, credsCtx)
 	diags = diags.Append(confirmDiags)
 	if !confirm {
@@ -449,8 +454,9 @@ func (c *LoginCommand) interactiveGetTokenByCode(hostname svchost.Hostname, cred
 			resp.Write([]byte(callbackSuccessMessage))
 		}),
 	}
+	panicHandler := logging.PanicHandlerWithTraceFn()
 	go func() {
-		defer logging.PanicHandler()
+		defer panicHandler()
 		err := server.Serve(listener)
 		if err != nil && err != http.ErrServerClosed {
 			diags = diags.Append(tfdiags.Sourceless(
@@ -498,7 +504,22 @@ func (c *LoginCommand) interactiveGetTokenByCode(hostname svchost.Hostname, cred
 
 	c.Ui.Output("OpenTofu will now wait for the host to signal that login was successful.\n")
 
-	code, ok := <-codeCh
+	var code string
+	var ok bool
+	select {
+	case <-c.ShutdownCh:
+		diags = diags.Append(
+			tfdiags.Sourceless(
+				tfdiags.Error,
+				"Action aborted",
+				"Current command was aborted by the calling code.",
+			),
+		)
+		code, ok = "", true
+		close(codeCh)
+	case code, ok = <-codeCh:
+	}
+
 	if !ok {
 		// If we got no code at all then the server wasn't able to start
 		// up, so we'll just give up.
@@ -509,6 +530,12 @@ func (c *LoginCommand) interactiveGetTokenByCode(hostname svchost.Hostname, cred
 		// The server will close soon enough when our process exits anyway,
 		// so we won't fuss about it for right now.
 		log.Printf("[WARN] login: callback server can't shut down: %s", err)
+	}
+
+	if code == "" {
+		// empty code is not possible in happy path as it is validated in the HTTP handler of our callback server
+		// so it means, the current command was interrupted by the shutdown signal
+		return nil, diags
 	}
 
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, httpclient.New())
@@ -754,7 +781,7 @@ func (c *LoginCommand) listenerForCallback(minPort, maxPort uint16) (net.Listene
 }
 
 func (c *LoginCommand) proofKey() (key, challenge string, err error) {
-	// Wel use a UUID-like string as the "proof key for code exchange" (PKCE)
+	// We'll use a UUID-like string as the "proof key for code exchange" (PKCE)
 	// that will eventually authenticate our request to the token endpoint.
 	// Standard UUIDs are explicitly not suitable as secrets according to the
 	// UUID spec, but our go-uuid just generates totally random number sequences

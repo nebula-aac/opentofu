@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package cloud
@@ -9,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	"github.com/hashicorp/go-tfe"
 	tfemocks "github.com/hashicorp/go-tfe/mocks"
 	"github.com/mitchellh/cli"
+	"go.uber.org/mock/gomock"
 )
 
 func MockAllRunEvents(t *testing.T, client *tfe.Client) (fullRunID string, emptyRunID string) {

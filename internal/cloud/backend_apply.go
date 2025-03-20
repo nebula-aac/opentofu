@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package cloud
@@ -73,6 +75,14 @@ func (b *Cloud) opApply(stopCtx, cancelCtx context.Context, op *backend.Operatio
 				`would mark everything for destruction, which is normally not what is desired. `+
 				`If you would like to destroy everything, please run 'tofu destroy' which `+
 				`does not require any configuration files.`,
+		))
+	}
+
+	if len(op.Excludes) != 0 {
+		diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Error,
+			"-exclude option is not supported",
+			"The -exclude option is not currently supported for remote plans.",
 		))
 	}
 
@@ -174,7 +184,7 @@ func (b *Cloud) opApply(stopCtx, cancelCtx context.Context, op *backend.Operatio
 			return r, errApplyNeedsUIConfirmation
 		} else {
 			// If we don't need to ask for confirmation, insert a blank
-			// line to separate the ouputs.
+			// line to separate the outputs.
 			if b.CLI != nil {
 				b.CLI.Output("")
 			}

@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tf
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/apparentlymart/go-dump/dump"
 	"github.com/opentofu/opentofu/internal/backend"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/states/statemgr"
 	"github.com/opentofu/opentofu/internal/tfdiags"
 	"github.com/zclconf/go-cty/cty"
@@ -294,7 +296,7 @@ func TestState_basic(t *testing.T) {
 			var got cty.Value
 			if !diags.HasErrors() && config.IsWhollyKnown() {
 				var moreDiags tfdiags.Diagnostics
-				got, moreDiags = dataSourceRemoteStateRead(config)
+				got, moreDiags = dataSourceRemoteStateRead(config, encryption.StateEncryptionDisabled())
 				diags = diags.Append(moreDiags)
 			}
 
@@ -319,7 +321,7 @@ func TestState_validation(t *testing.T) {
 	// the validation step in isolation does not attempt to configure
 	// the backend.
 	overrideBackendFactories = map[string]backend.InitFn{
-		"failsconfigure": func() backend.Backend {
+		"failsconfigure": func(enc encryption.StateEncryption) backend.Backend {
 			return backendFailsConfigure{}
 		},
 	}
@@ -345,31 +347,31 @@ func TestState_validation(t *testing.T) {
 
 type backendFailsConfigure struct{}
 
-func (b backendFailsConfigure) ConfigSchema(context.Context) *configschema.Block {
+func (b backendFailsConfigure) ConfigSchema() *configschema.Block {
 	log.Printf("[TRACE] backendFailsConfigure.ConfigSchema")
 	return &configschema.Block{} // intentionally empty configuration schema
 }
 
-func (b backendFailsConfigure) PrepareConfig(_ context.Context, given cty.Value) (cty.Value, tfdiags.Diagnostics) {
+func (b backendFailsConfigure) PrepareConfig(given cty.Value) (cty.Value, tfdiags.Diagnostics) {
 	// No special actions to take here
 	return given, nil
 }
 
-func (b backendFailsConfigure) Configure(_ context.Context, config cty.Value) tfdiags.Diagnostics {
+func (b backendFailsConfigure) Configure(config cty.Value) tfdiags.Diagnostics {
 	log.Printf("[TRACE] backendFailsConfigure.Configure(%#v)", config)
 	var diags tfdiags.Diagnostics
 	diags = diags.Append(fmt.Errorf("Configure should never be called"))
 	return diags
 }
 
-func (b backendFailsConfigure) StateMgr(context.Context, string) (statemgr.Full, error) {
+func (b backendFailsConfigure) StateMgr(workspace string) (statemgr.Full, error) {
 	return nil, fmt.Errorf("StateMgr not implemented")
 }
 
-func (b backendFailsConfigure) DeleteWorkspace(_ context.Context, name string, _ bool) error {
+func (b backendFailsConfigure) DeleteWorkspace(name string, _ bool) error {
 	return fmt.Errorf("DeleteWorkspace not implemented")
 }
 
-func (b backendFailsConfigure) Workspaces(context.Context) ([]string, error) {
+func (b backendFailsConfigure) Workspaces() ([]string, error) {
 	return nil, fmt.Errorf("Workspaces not implemented")
 }

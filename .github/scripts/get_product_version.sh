@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Copyright (c) HashiCorp, Inc.
+# Copyright (c) The OpenTofu Authors
+# SPDX-License-Identifier: MPL-2.0
+# Copyright (c) 2023 HashiCorp, Inc.
 # SPDX-License-Identifier: MPL-2.0
 
 set -uo pipefail
@@ -9,7 +11,7 @@ VERSION="${RAW_VERSION#v}"
 
 # Split off the build metadata part, if any
 # (we won't actually include it in our final version, and handle it only for
-# compleness against semver syntax.)
+# completeness against semver syntax.)
 IFS='+' read -ra VERSION BUILD_META <<< "$VERSION"
 
 # Separate out the prerelease part, if any

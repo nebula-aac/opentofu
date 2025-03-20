@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package ssh
@@ -43,7 +45,7 @@ var (
 	randLock   sync.Mutex
 	randShared *rand.Rand
 
-	// enable ssh keeplive probes by default
+	// enable ssh keepalive probes by default
 	keepAliveInterval = 2 * time.Second
 
 	// max time to wait for for a KeepAlive response before considering the
@@ -102,7 +104,7 @@ func New(v cty.Value) (*Communicator, error) {
 	// Set up the random number generator once. The seed value is the
 	// time multiplied by the PID. This can overflow the int64 but that
 	// is okay. We multiply by the PID in case we have multiple processes
-	// grabbing this at the same time. This is possible with Terraform and
+	// grabbing this at the same time. This is possible with OpenTofu and
 	// if we communicate to the same host at the same instance, we could
 	// overwrite the same files. Multiplying by the PID prevents this.
 	randLock.Lock()
@@ -602,7 +604,7 @@ func (c *Communicator) scpSession(scpCommand string, f func(io.Writer, *bufio.Re
 
 	if err != nil {
 		if exitErr, ok := err.(*ssh.ExitError); ok {
-			// Otherwise, we have an ExitErorr, meaning we can just read
+			// Otherwise, we have an ExitError, meaning we can just read
 			// the exit status
 			log.Printf("[ERROR] %s", exitErr)
 
@@ -716,7 +718,7 @@ func scpUploadDirProtocol(name string, w io.Writer, r *bufio.Reader, f func() er
 		return err
 	}
 
-	fmt.Fprintln(w, "E")
+	_, err = fmt.Fprintln(w, "E")
 	if err != nil {
 		return err
 	}

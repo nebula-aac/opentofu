@@ -1,9 +1,13 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
 
 import (
+	"testing"
+
 	"github.com/opentofu/opentofu/internal/addrs"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
 	"github.com/opentofu/opentofu/internal/providers"
@@ -31,7 +35,7 @@ func simpleTestSchemas() *Schemas {
 // The intended use for this is in testing components that use schemas to
 // drive other behavior, such as reference analysis during graph construction,
 // but that don't actually need to interact with providers otherwise.
-func schemaOnlyProvidersForTesting(schemas map[addrs.Provider]providers.ProviderSchema) *contextPlugins {
+func schemaOnlyProvidersForTesting(schemas map[addrs.Provider]providers.ProviderSchema, t *testing.T) *contextPlugins {
 	factories := make(map[addrs.Provider]providers.Factory, len(schemas))
 
 	for providerAddr, schema := range schemas {

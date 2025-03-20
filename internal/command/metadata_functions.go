@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -17,7 +19,7 @@ var (
 )
 
 // MetadataFunctionsCommand is a Command implementation that prints out information
-// about the available functions in Terraform.
+// about the available functions in OpenTofu.
 type MetadataFunctionsCommand struct {
 	Meta
 }
@@ -77,7 +79,7 @@ Usage: tofu [global options] metadata functions -json
 
 func isIgnoredFunction(name string) bool {
 	for _, i := range ignoredFunctions {
-		if i == name {
+		if i == name || lang.CoreNamespace+i == name {
 			return true
 		}
 	}

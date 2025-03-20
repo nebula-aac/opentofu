@@ -49,7 +49,7 @@ var parseIPTests = []struct {
 	{"a1:a2:a3:a4::b1:b2:b3:b4", nil}, // Issue 6628
 	//
 	// NOTE: These correct failures were added for go-1.17, but are a
-	// backwards-incompatible change for Terraform users, who might have
+	// backwards-incompatible change for OpenTofu users, who might have
 	// already written modules using leading zeroes.
 	//
 	//{"127.001.002.003", nil},
@@ -103,8 +103,8 @@ var parseCIDRTests = []struct {
 	{"0.0.0.-3/32", nil, nil, &ParseError{Type: "CIDR address", Text: "0.0.0.-3/32"}},
 	{"0.0.0.0/-0", nil, nil, &ParseError{Type: "CIDR address", Text: "0.0.0.0/-0"}},
 	//
-	// NOTE: Theis correct failure was added for go-1.17, but is a
-	// backwards-incompatible change for Terraform users, who might have
+	// NOTE: This correct failure was added for go-1.17, but is a
+	// backwards-incompatible change for OpenTofu users, who might have
 	// already written modules using leading zeroes.
 	//
 	//{"127.000.000.001/32", nil, nil, &ParseError{Type: "CIDR address", Text: "127.000.000.001/32"}},

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package initwd
@@ -45,7 +47,7 @@ func TestModuleInstaller(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, nil)
-	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks, configs.RootModuleCallForTesting())
 	assertNoDiagnostics(t, diags)
 
 	wantCalls := []testInstallHookCall{
@@ -59,7 +61,7 @@ func TestModuleInstaller(t *testing.T) {
 			Name:        "Install",
 			ModuleAddr:  "child_a.child_b",
 			PackageAddr: "",
-			LocalPath:   "child_a/child_b",
+			LocalPath:   filepath.Join("child_a", "child_b"),
 		},
 	}
 
@@ -76,7 +78,7 @@ func TestModuleInstaller(t *testing.T) {
 
 	// Make sure the configuration is loadable now.
 	// (This ensures that correct information is recorded in the manifest.)
-	config, loadDiags := loader.LoadConfig(".")
+	config, loadDiags := loader.LoadConfig(".", configs.RootModuleCallForTesting())
 	assertNoDiagnostics(t, tfdiags.Diagnostics{}.Append(loadDiags))
 
 	wantTraces := map[string]string{
@@ -109,7 +111,7 @@ func TestModuleInstaller_error(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, nil)
-	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks, configs.RootModuleCallForTesting())
 
 	if !diags.HasErrors() {
 		t.Fatal("expected error")
@@ -130,7 +132,7 @@ func TestModuleInstaller_emptyModuleName(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, nil)
-	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks, configs.RootModuleCallForTesting())
 
 	if !diags.HasErrors() {
 		t.Fatal("expected error")
@@ -151,7 +153,7 @@ func TestModuleInstaller_invalidModuleName(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, registry.NewClient(nil, nil))
-	_, diags := inst.InstallModules(context.Background(), dir, "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), dir, "tests", false, false, hooks, configs.RootModuleCallForTesting())
 	if !diags.HasErrors() {
 		t.Fatal("expected error")
 	} else {
@@ -188,7 +190,7 @@ func TestModuleInstaller_packageEscapeError(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, nil)
-	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks, configs.RootModuleCallForTesting())
 
 	if !diags.HasErrors() {
 		t.Fatal("expected error")
@@ -226,64 +228,109 @@ func TestModuleInstaller_explicitPackageBoundary(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, nil)
-	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks, configs.RootModuleCallForTesting())
 
 	if diags.HasErrors() {
 		t.Fatalf("unexpected errors\n%s", diags.Err().Error())
 	}
 }
 
-func TestModuleInstaller_ExactMatchPrerelease(t *testing.T) {
+func TestModuleInstaller_Prerelease(t *testing.T) {
 	if os.Getenv("TF_ACC") == "" {
 		t.Skip("this test accesses registry.opentofu.org and github.com; set TF_ACC=1 to run it")
 	}
 
-	fixtureDir := filepath.Clean("testdata/prerelease-version-constraint-match")
-	dir, done := tempChdir(t, fixtureDir)
-	defer done()
-
-	hooks := &testInstallHooks{}
-
-	modulesDir := filepath.Join(dir, ".terraform/modules")
-
-	loader, close := configload.NewLoaderForTests(t)
-	defer close()
-	inst := NewModuleInstaller(modulesDir, loader, registry.NewClient(nil, nil))
-	cfg, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks)
-
-	if diags.HasErrors() {
-		t.Fatalf("found unexpected errors: %s", diags.Err())
+	testCases := []struct {
+		name            string
+		modulePath      string
+		expectedVersion string
+		shouldError     bool
+	}{
+		{
+			name:            "exact match",
+			modulePath:      "testdata/prerelease-constraint-match",
+			expectedVersion: "v0.0.3-alpha.1",
+		},
+		{
+			name:            "exact match v prefix",
+			modulePath:      "testdata/prerelease-constraint-v-match",
+			expectedVersion: "v0.0.3-alpha.1",
+		},
+		{
+			name:            "exact match eq selector",
+			modulePath:      "testdata/prerelease-constraint-eq-match",
+			expectedVersion: "v0.0.3-alpha.1",
+		},
+		{
+			name:            "exact match v prefix eq selector",
+			modulePath:      "testdata/prerelease-constraint-v-eq-match",
+			expectedVersion: "v0.0.3-alpha.1",
+		},
+		{
+			name:            "partial match",
+			modulePath:      "testdata/prerelease-constraint",
+			expectedVersion: "v0.0.2",
+		},
+		{
+			name:            "partial match v prefix",
+			modulePath:      "testdata/prerelease-constraint-v",
+			expectedVersion: "v0.0.2",
+		},
+		{
+			name:        "multiple constraints",
+			modulePath:  "testdata/prerelease-constraint-multiple",
+			shouldError: true,
+			// NOTE: This one fails because we don't support mixing a prerelease version
+			// selection with other constraints in a single constraint string. This is
+			// unfortunate but accepted for now as a concession to backward compatibility
+			// until we have a more complete plan on how to deal with the various legacy
+			// quirks of our version constraint matching.
+			//
+			// For more information:
+			//     https://github.com/opentofu/opentofu/issues/2117
+		},
+		{
+			name:        "err",
+			modulePath:  "testdata/prerelease-constraint-err",
+			shouldError: true,
+		},
+		{
+			name:        "err v prefix",
+			modulePath:  "testdata/prerelease-constraint-v-err",
+			shouldError: true,
+		},
 	}
 
-	if !cfg.Children["acctest_exact"].Version.Equal(version.Must(version.NewVersion("v0.0.3-alpha.1"))) {
-		t.Fatalf("expected version %s but found version %s", "v0.0.3-alpha.1", cfg.Version.String())
-	}
-}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixtureDir := filepath.Clean(tc.modulePath)
+			dir, done := tempChdir(t, fixtureDir)
+			defer done()
 
-func TestModuleInstaller_PartialMatchPrerelease(t *testing.T) {
-	if os.Getenv("TF_ACC") == "" {
-		t.Skip("this test accesses registry.opentofu.org and github.com; set TF_ACC=1 to run it")
-	}
+			hooks := &testInstallHooks{}
 
-	fixtureDir := filepath.Clean("testdata/prerelease-version-constraint")
-	dir, done := tempChdir(t, fixtureDir)
-	defer done()
+			modulesDir := filepath.Join(dir, ".terraform/modules")
 
-	hooks := &testInstallHooks{}
+			loader, closeLoader := configload.NewLoaderForTests(t)
+			defer closeLoader()
+			inst := NewModuleInstaller(modulesDir, loader, registry.NewClient(nil, nil))
+			cfg, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks, configs.RootModuleCallForTesting())
 
-	modulesDir := filepath.Join(dir, ".terraform/modules")
+			if tc.shouldError {
+				if !diags.HasErrors() {
+					t.Fatalf("an error was expected, but none was found")
+				}
+				return
+			}
 
-	loader, close := configload.NewLoaderForTests(t)
-	defer close()
-	inst := NewModuleInstaller(modulesDir, loader, registry.NewClient(nil, nil))
-	cfg, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks)
+			if diags.HasErrors() {
+				t.Fatalf("found unexpected errors: %s", diags.Err())
+			}
 
-	if diags.HasErrors() {
-		t.Fatalf("found unexpected errors: %s", diags.Err())
-	}
-
-	if !cfg.Children["acctest_partial"].Version.Equal(version.Must(version.NewVersion("v0.0.2"))) {
-		t.Fatalf("expected version %s but found version %s", "v0.0.2", cfg.Version.String())
+			if !cfg.Children["acctest"].Version.Equal(version.Must(version.NewVersion(tc.expectedVersion))) {
+				t.Fatalf("expected version %s but found version %s", tc.expectedVersion, cfg.Version.String())
+			}
+		})
 	}
 }
 
@@ -299,7 +346,7 @@ func TestModuleInstaller_invalid_version_constraint_error(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, nil)
-	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks, configs.RootModuleCallForTesting())
 
 	if !diags.HasErrors() {
 		t.Fatal("expected error")
@@ -325,7 +372,7 @@ func TestModuleInstaller_invalidVersionConstraintGetter(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, nil)
-	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks, configs.RootModuleCallForTesting())
 
 	if !diags.HasErrors() {
 		t.Fatal("expected error")
@@ -351,7 +398,7 @@ func TestModuleInstaller_invalidVersionConstraintLocal(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, nil)
-	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks, configs.RootModuleCallForTesting())
 
 	if !diags.HasErrors() {
 		t.Fatal("expected error")
@@ -377,7 +424,7 @@ func TestModuleInstaller_symlink(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, nil)
-	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks, configs.RootModuleCallForTesting())
 	assertNoDiagnostics(t, diags)
 
 	wantCalls := []testInstallHookCall{
@@ -391,7 +438,7 @@ func TestModuleInstaller_symlink(t *testing.T) {
 			Name:        "Install",
 			ModuleAddr:  "child_a.child_b",
 			PackageAddr: "",
-			LocalPath:   "child_a/child_b",
+			LocalPath:   filepath.Join("child_a", "child_b"),
 		},
 	}
 
@@ -408,7 +455,7 @@ func TestModuleInstaller_symlink(t *testing.T) {
 
 	// Make sure the configuration is loadable now.
 	// (This ensures that correct information is recorded in the manifest.)
-	config, loadDiags := loader.LoadConfig(".")
+	config, loadDiags := loader.LoadConfig(".", configs.RootModuleCallForTesting())
 	assertNoDiagnostics(t, tfdiags.Diagnostics{}.Append(loadDiags))
 
 	wantTraces := map[string]string{
@@ -453,7 +500,7 @@ func TestLoaderInstallModules_registry(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, registry.NewClient(nil, nil))
-	_, diags := inst.InstallModules(context.Background(), dir, "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), dir, "tests", false, false, hooks, configs.RootModuleCallForTesting())
 	assertNoDiagnostics(t, diags)
 
 	v := version.Must(version.NewVersion("0.0.1"))
@@ -544,7 +591,7 @@ func TestLoaderInstallModules_registry(t *testing.T) {
 		t.Fatalf("wrong installer calls\n%s", diff)
 	}
 
-	//check that the registry reponses were cached
+	// check that the registry responses were cached
 	packageAddr := addrs.ModuleRegistryPackage{
 		Host:         svchost.Hostname("registry.opentofu.org"),
 		Namespace:    "hashicorp",
@@ -567,7 +614,7 @@ func TestLoaderInstallModules_registry(t *testing.T) {
 
 	// Make sure the configuration is loadable now.
 	// (This ensures that correct information is recorded in the manifest.)
-	config, loadDiags := loader.LoadConfig(".")
+	config, loadDiags := loader.LoadConfig(".", configs.RootModuleCallForTesting())
 	assertNoDiagnostics(t, tfdiags.Diagnostics{}.Append(loadDiags))
 
 	wantTraces := map[string]string{
@@ -616,7 +663,7 @@ func TestLoaderInstallModules_goGetter(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, registry.NewClient(nil, nil))
-	_, diags := inst.InstallModules(context.Background(), dir, "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), dir, "tests", false, false, hooks, configs.RootModuleCallForTesting())
 	assertNoDiagnostics(t, diags)
 
 	wantCalls := []testInstallHookCall{
@@ -697,7 +744,7 @@ func TestLoaderInstallModules_goGetter(t *testing.T) {
 
 	// Make sure the configuration is loadable now.
 	// (This ensures that correct information is recorded in the manifest.)
-	config, loadDiags := loader.LoadConfig(".")
+	config, loadDiags := loader.LoadConfig(".", configs.RootModuleCallForTesting())
 	assertNoDiagnostics(t, tfdiags.Diagnostics{}.Append(loadDiags))
 
 	wantTraces := map[string]string{
@@ -734,7 +781,7 @@ func TestModuleInstaller_fromTests(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, nil)
-	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), ".", "tests", false, false, hooks, configs.RootModuleCallForTesting())
 	assertNoDiagnostics(t, diags)
 
 	wantCalls := []testInstallHookCall{
@@ -759,10 +806,10 @@ func TestModuleInstaller_fromTests(t *testing.T) {
 
 	// Make sure the configuration is loadable now.
 	// (This ensures that correct information is recorded in the manifest.)
-	config, loadDiags := loader.LoadConfigWithTests(".", "tests")
+	config, loadDiags := loader.LoadConfigWithTests(".", "tests", configs.RootModuleCallForTesting())
 	assertNoDiagnostics(t, tfdiags.Diagnostics{}.Append(loadDiags))
 
-	if config.Module.Tests["tests/main.tftest.hcl"].Runs[0].ConfigUnderTest == nil {
+	if config.Module.Tests[filepath.Join("tests", "main.tftest.hcl")].Runs[0].ConfigUnderTest == nil {
 		t.Fatalf("should have loaded config into the relevant run block but did not")
 	}
 }
@@ -791,7 +838,7 @@ func TestLoadInstallModules_registryFromTest(t *testing.T) {
 	loader, close := configload.NewLoaderForTests(t)
 	defer close()
 	inst := NewModuleInstaller(modulesDir, loader, registry.NewClient(nil, nil))
-	_, diags := inst.InstallModules(context.Background(), dir, "tests", false, false, hooks)
+	_, diags := inst.InstallModules(context.Background(), dir, "tests", false, false, hooks, configs.RootModuleCallForTesting())
 	assertNoDiagnostics(t, diags)
 
 	v := version.Must(version.NewVersion("0.0.1"))
@@ -845,7 +892,7 @@ func TestLoadInstallModules_registryFromTest(t *testing.T) {
 		t.Fatalf("wrong installer calls\n%s", diff)
 	}
 
-	//check that the registry reponses were cached
+	// check that the registry responses were cached
 	packageAddr := addrs.ModuleRegistryPackage{
 		Host:         svchost.Hostname("registry.opentofu.org"),
 		Namespace:    "hashicorp",
@@ -868,7 +915,7 @@ func TestLoadInstallModules_registryFromTest(t *testing.T) {
 
 	// Make sure the configuration is loadable now.
 	// (This ensures that correct information is recorded in the manifest.)
-	config, loadDiags := loader.LoadConfigWithTests(".", "tests")
+	config, loadDiags := loader.LoadConfigWithTests(".", "tests", configs.RootModuleCallForTesting())
 	assertNoDiagnostics(t, tfdiags.Diagnostics{}.Append(loadDiags))
 
 	if config.Module.Tests["main.tftest.hcl"].Runs[0].ConfigUnderTest == nil {
