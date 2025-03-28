@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -6,6 +8,7 @@ package command
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
@@ -22,6 +25,15 @@ import (
 // for root module input variables.
 const VarEnvPrefix = "TF_VAR_"
 
+// collectVariableValuesWithTests inspects the same sources of variables as
+// collectVariableValues, but also includes any autoloaded variables from the
+// given tests directory.
+func (m *Meta) collectVariableValuesWithTests(testDir string) (map[string]backend.UnparsedVariableValue, tfdiags.Diagnostics) {
+	values, diags := m.collectVariableValues()
+	diags = diags.Append(m.addVarsFromDir(testDir, values))
+	return values, diags
+}
+
 // collectVariableValues inspects the various places that root module input variable
 // values can come from and constructs a map ready to be passed to the
 // backend as part of a backend.Operation.
@@ -31,6 +43,11 @@ const VarEnvPrefix = "TF_VAR_"
 // parsed.
 func (m *Meta) collectVariableValues() (map[string]backend.UnparsedVariableValue, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
+
+	if m.inputVariableCache != nil {
+		return m.inputVariableCache, nil
+	}
+
 	ret := map[string]backend.UnparsedVariableValue{}
 
 	// First we'll deal with environment variables, since they have the lowest
@@ -60,30 +77,11 @@ func (m *Meta) collectVariableValues() (map[string]backend.UnparsedVariableValue
 		}
 	}
 
-	// Next up we have some implicit files that are loaded automatically
-	// if they are present. There's the original terraform.tfvars
-	// (DefaultVarsFilename) along with the later-added search for all files
-	// ending in .auto.tfvars.
-	if _, err := os.Stat(DefaultVarsFilename); err == nil {
-		moreDiags := m.addVarsFromFile(DefaultVarsFilename, tofu.ValueFromAutoFile, ret)
-		diags = diags.Append(moreDiags)
-	}
-	const defaultVarsFilenameJSON = DefaultVarsFilename + ".json"
-	if _, err := os.Stat(defaultVarsFilenameJSON); err == nil {
-		moreDiags := m.addVarsFromFile(defaultVarsFilenameJSON, tofu.ValueFromAutoFile, ret)
-		diags = diags.Append(moreDiags)
-	}
-	if infos, err := os.ReadDir("."); err == nil {
-		// "infos" is already sorted by name, so we just need to filter it here.
-		for _, info := range infos {
-			name := info.Name()
-			if !isAutoVarFile(name) {
-				continue
-			}
-			moreDiags := m.addVarsFromFile(name, tofu.ValueFromAutoFile, ret)
-			diags = diags.Append(moreDiags)
-		}
-	}
+	// Next up we load implicit files from the specified directory (first root then tests dir
+	// as tests dir files have higher precedence). These files are automatically loaded if present.
+	// There's the original terraform.tfvars (DefaultVarsFilename) along with the later-added
+	// search for all files ending in .auto.tfvars.
+	diags = diags.Append(m.addVarsFromDir(".", ret))
 
 	// Finally we process values given explicitly on the command line, either
 	// as individual literal settings or as additional files to read.
@@ -129,8 +127,40 @@ func (m *Meta) collectVariableValues() (map[string]backend.UnparsedVariableValue
 			diags = diags.Append(fmt.Errorf("unsupported variable option name %q (this is a bug in OpenTofu)", rawFlag.Name))
 		}
 	}
+	m.inputVariableCache = ret
 
 	return ret, diags
+}
+
+func (m *Meta) updateInputVariableCache(key string, value backend.UnparsedVariableValue) {
+	m.inputVariableCache[key] = value
+}
+
+func (m *Meta) addVarsFromDir(currDir string, ret map[string]backend.UnparsedVariableValue) tfdiags.Diagnostics {
+	var diags tfdiags.Diagnostics
+
+	if _, err := os.Stat(filepath.Join(currDir, DefaultVarsFilename)); err == nil {
+		moreDiags := m.addVarsFromFile(filepath.Join(currDir, DefaultVarsFilename), tofu.ValueFromAutoFile, ret)
+		diags = diags.Append(moreDiags)
+	}
+	const defaultVarsFilenameJSON = DefaultVarsFilename + ".json"
+	if _, err := os.Stat(filepath.Join(currDir, defaultVarsFilenameJSON)); err == nil {
+		moreDiags := m.addVarsFromFile(filepath.Join(currDir, defaultVarsFilenameJSON), tofu.ValueFromAutoFile, ret)
+		diags = diags.Append(moreDiags)
+	}
+	if infos, err := os.ReadDir(currDir); err == nil {
+		// "infos" is already sorted by name, so we just need to filter it here.
+		for _, info := range infos {
+			name := info.Name()
+			if !isAutoVarFile(name) {
+				continue
+			}
+			moreDiags := m.addVarsFromFile(filepath.Join(currDir, name), tofu.ValueFromAutoFile, ret)
+			diags = diags.Append(moreDiags)
+		}
+	}
+
+	return diags
 }
 
 func (m *Meta) addVarsFromFile(filename string, sourceType tofu.ValueSourceType, to map[string]backend.UnparsedVariableValue) tfdiags.Diagnostics {
@@ -164,7 +194,15 @@ func (m *Meta) addVarsFromFile(filename string, sourceType tofu.ValueSourceType,
 	loader.Parser().ForceFileSource(filename, src)
 
 	var f *hcl.File
-	if strings.HasSuffix(filename, ".json") {
+
+	extJSON := strings.HasSuffix(filename, ".json")
+	extTfvars := strings.HasSuffix(filename, DefaultVarsExtension)
+
+	// Only try json detection if ambiguous
+	// Ex: -var-file=<(./scripts/vars.sh)
+	detectJSON := !extJSON && !extTfvars && strings.HasPrefix(strings.TrimSpace(string(src)), "{")
+
+	if extJSON || detectJSON {
 		var hclDiags hcl.Diagnostics
 		f, hclDiags = hcljson.Parse(src, filename)
 		diags = diags.Append(hclDiags)
@@ -223,7 +261,7 @@ func (m *Meta) addVarsFromFile(filename string, sourceType tofu.ValueSourceType,
 	return diags
 }
 
-// unparsedVariableValueLiteral is a backend.UnparsedVariableValue
+// unparsedVariableValueExpression is a backend.UnparsedVariableValue
 // implementation that was actually already parsed (!). This is
 // intended to deal with expressions inside "tfvars" files.
 type unparsedVariableValueExpression struct {

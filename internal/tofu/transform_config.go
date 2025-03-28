@@ -1,10 +1,11 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/opentofu/opentofu/internal/addrs"
@@ -70,6 +71,12 @@ func (t *ConfigTransformer) transform(g *Graph, config *configs.Config, generate
 		return nil
 	}
 
+	// If the module is being overridden, do nothing. We don't want to create anything
+	// from the underlying module.
+	if config.Module.IsOverridden {
+		return nil
+	}
+
 	// Add our resources
 	if err := t.transformSingle(g, config, generateConfigPath); err != nil {
 		return err
@@ -102,7 +109,7 @@ func (t *ConfigTransformer) transformSingle(g *Graph, config *configs.Config, ge
 	// Only include import targets that are targeting the current module.
 	var importTargets []*ImportTarget
 	for _, target := range t.importTargets {
-		if targetModule := target.Addr.Module.Module(); targetModule.Equal(config.Path) {
+		if targetModule := target.StaticAddr().Module; targetModule.Equal(config.Path) {
 			importTargets = append(importTargets, target)
 		}
 	}
@@ -122,7 +129,7 @@ func (t *ConfigTransformer) transformSingle(g *Graph, config *configs.Config, ge
 
 		var matchedIndices []int
 		for ix, i := range importTargets {
-			if target := i.Addr.ContainingResource().Config(); target.Equal(configAddr) {
+			if target := i.StaticAddr(); target.Equal(configAddr) {
 				// This import target has been claimed by an actual resource,
 				// let's make a note of this to remove it from the targets.
 				matchedIndices = append(matchedIndices, ix)
@@ -160,35 +167,33 @@ func (t *ConfigTransformer) transformSingle(g *Graph, config *configs.Config, ge
 	// If any import targets were not claimed by resources, then let's add them
 	// into the graph now.
 	//
-	// We actually know that if any of the resources aren't claimed and
-	// generateConfig is false, then we have a problem. But, we can't raise a
-	// nice error message from this function.
+	// We should only reach this point if config generation is enabled, since we validate that all import targets have
+	// a resource in validateImportTargets when config generation is disabled
 	//
 	// We'll add the nodes that we know will fail, and catch them again later
 	// in the processing when we are in a position to raise a much more helpful
 	// error message.
-	//
-	// TODO: We could actually catch and process these kind of problems earlier,
-	//   this is something that could be done during the Validate process.
 	for _, i := range importTargets {
-		// The case in which an unmatched import block targets an expanded
-		// resource instance can error here. Others can error later.
-		if i.Addr.Resource.Key != addrs.NoKey {
-			return fmt.Errorf("Config generation for count and for_each resources not supported.\n\nYour configuration contains an import block with a \"to\" address of %s. This resource instance does not exist in configuration.\n\nIf you intended to target a resource that exists in configuration, please double-check the address. Otherwise, please remove this import block or re-run the plan without the -generate-config-out flag to ignore the import block.", i.Addr)
-		}
+		if len(generateConfigPath) > 0 {
+			// Create a node with the resource and import target. This node will take care of the config generation
+			abstract := &NodeAbstractResource{
+				// We've already validated in validateImportTargets that the address is fully resolvable
+				Addr:               i.ResolvedAddr().ConfigResource(),
+				importTargets:      []*ImportTarget{i},
+				generateConfigPath: generateConfigPath,
+			}
 
-		abstract := &NodeAbstractResource{
-			Addr:               i.Addr.ConfigResource(),
-			importTargets:      []*ImportTarget{i},
-			generateConfigPath: generateConfigPath,
-		}
+			var node dag.Vertex = abstract
+			if f := t.Concrete; f != nil {
+				node = f(abstract)
+			}
 
-		var node dag.Vertex = abstract
-		if f := t.Concrete; f != nil {
-			node = f(abstract)
+			g.Add(node)
+		} else {
+			// Technically we shouldn't reach this point, as we've already validated that a resource exists
+			// in validateImportTargets
+			return importResourceWithoutConfigDiags(i.StaticAddr().String(), i.Config)
 		}
-
-		g.Add(node)
 	}
 
 	return nil

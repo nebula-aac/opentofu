@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package planfile
@@ -221,6 +223,14 @@ func readTfplan(r io.Reader) (*plans.Plan, error) {
 		plan.TargetAddrs = append(plan.TargetAddrs, target.Subject)
 	}
 
+	for _, rawExcludeAddr := range rawPlan.ExcludeAddrs {
+		exclude, diags := addrs.ParseTargetStr(rawExcludeAddr)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("plan contains invalid exclude address %q: %w", exclude, diags.Err())
+		}
+		plan.ExcludeAddrs = append(plan.ExcludeAddrs, exclude.Subject)
+	}
+
 	for _, rawReplaceAddr := range rawPlan.ForceReplaceAddrs {
 		addr, diags := addrs.ParseAbsResourceInstanceStr(rawReplaceAddr)
 		if diags.HasErrors() {
@@ -388,6 +398,9 @@ func changeFromTfplan(rawChange *planproto.Change) (*plans.ChangeSrc, error) {
 		afterIdx = 1
 	case planproto.Action_DELETE:
 		ret.Action = plans.Delete
+		beforeIdx = 0
+	case planproto.Action_FORGET:
+		ret.Action = plans.Forget
 		beforeIdx = 0
 	case planproto.Action_CREATE_THEN_DELETE:
 		ret.Action = plans.CreateThenDelete
@@ -605,6 +618,10 @@ func writeTfplan(plan *plans.Plan, w io.Writer) error {
 		rawPlan.TargetAddrs = append(rawPlan.TargetAddrs, targetAddr.String())
 	}
 
+	for _, excludeAddr := range plan.ExcludeAddrs {
+		rawPlan.ExcludeAddrs = append(rawPlan.ExcludeAddrs, excludeAddr.String())
+	}
+
 	for _, replaceAddr := range plan.ForceReplaceAddrs {
 		rawPlan.ForceReplaceAddrs = append(rawPlan.ForceReplaceAddrs, replaceAddr.String())
 	}
@@ -792,6 +809,9 @@ func changeToTfplan(change *plans.ChangeSrc) (*planproto.Change, error) {
 		ret.Values = []*planproto.DynamicValue{before, after}
 	case plans.Delete:
 		ret.Action = planproto.Action_DELETE
+		ret.Values = []*planproto.DynamicValue{before}
+	case plans.Forget:
+		ret.Action = planproto.Action_FORGET
 		ret.Values = []*planproto.DynamicValue{before}
 	case plans.DeleteThenCreate:
 		ret.Action = planproto.Action_DELETE_THEN_CREATE

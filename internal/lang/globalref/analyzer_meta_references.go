@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package globalref
@@ -57,7 +59,7 @@ func (a *Analyzer) MetaReferences(ref Reference) []Reference {
 		// instance with an unknown key, but we don't have any representation
 		// of that. For the moment it's pretty immaterial since most of our
 		// other analysis ignores instance keys anyway, but maybe we'll revisit
-		// this latter to distingish these two cases better.
+		// this latter to distinguish these two cases better.
 		return a.metaReferencesModuleCall(moduleAddr, targetAddr.Instance(addrs.NoKey), remaining)
 	case addrs.CountAttr, addrs.ForEachAttr:
 		if resourceAddr, ok := ref.ResourceInstance(); ok {
@@ -73,7 +75,7 @@ func (a *Analyzer) MetaReferences(ref Reference) []Reference {
 		// with an unknown key, but we don't have any representation of that.
 		// For the moment it's pretty immaterial since most of our other
 		// analysis ignores instance keys anyway, but maybe we'll revisit this
-		// latter to distingish these two cases better.
+		// latter to distinguish these two cases better.
 		return a.metaReferencesResourceInstance(moduleAddr, targetAddr.Instance(addrs.NoKey), remaining)
 	default:
 		// For anything we don't explicitly support we'll just return no

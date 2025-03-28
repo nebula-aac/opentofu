@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -130,6 +132,14 @@ type MockHook struct {
 	PostApplyImportAddr   addrs.AbsResourceInstance
 	PostApplyImportReturn HookAction
 	PostApplyImportError  error
+
+	PreApplyForgetCalled bool
+	PreApplyForgetReturn HookAction
+	PreApplyForgetError  error
+
+	PostApplyForgetCalled bool
+	PostApplyForgetReturn HookAction
+	PostApplyForgetError  error
 
 	StoppingCalled bool
 
@@ -290,18 +300,27 @@ func (h *MockHook) PostImportState(addr addrs.AbsResourceInstance, imported []pr
 }
 
 func (h *MockHook) PrePlanImport(addr addrs.AbsResourceInstance, importID string) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PrePlanImportCalled = true
 	h.PrePlanImportAddr = addr
 	return h.PrePlanImportReturn, h.PrePlanImportError
 }
 
 func (h *MockHook) PostPlanImport(addr addrs.AbsResourceInstance, imported []providers.ImportedResource) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PostPlanImportCalled = true
 	h.PostPlanImportAddr = addr
 	return h.PostPlanImportReturn, h.PostPlanImportError
 }
 
 func (h *MockHook) PreApplyImport(addr addrs.AbsResourceInstance, importing plans.ImportingSrc) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
 	h.PreApplyImportCalled = true
 	h.PreApplyImportAddr = addr
 	return h.PreApplyImportReturn, h.PreApplyImportError
@@ -314,6 +333,22 @@ func (h *MockHook) PostApplyImport(addr addrs.AbsResourceInstance, importing pla
 	h.PostApplyImportCalled = true
 	h.PostApplyImportAddr = addr
 	return h.PostApplyImportReturn, h.PostApplyImportError
+}
+
+func (h *MockHook) PreApplyForget(_ addrs.AbsResourceInstance) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
+	h.PreApplyForgetCalled = true
+	return h.PreApplyForgetReturn, h.PreApplyForgetError
+}
+
+func (h *MockHook) PostApplyForget(_ addrs.AbsResourceInstance) (HookAction, error) {
+	h.Lock()
+	defer h.Unlock()
+
+	h.PostApplyForgetCalled = true
+	return h.PostApplyForgetReturn, h.PostApplyForgetError
 }
 
 func (h *MockHook) Stopping() {

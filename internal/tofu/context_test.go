@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -6,6 +8,7 @@ package tofu
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -20,6 +23,7 @@ import (
 	"github.com/opentofu/opentofu/internal/configs/configload"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
 	"github.com/opentofu/opentofu/internal/configs/hcl2shim"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/plans"
 	"github.com/opentofu/opentofu/internal/plans/planfile"
 	"github.com/opentofu/opentofu/internal/providers"
@@ -103,7 +107,7 @@ func TestNewContextRequiredVersion(t *testing.T) {
 				t.Fatalf("unexpected NewContext errors: %s", diags.Err())
 			}
 
-			diags = c.Validate(mod)
+			diags = c.Validate(context.Background(), mod)
 			if diags.HasErrors() != tc.Err {
 				t.Fatalf("err: %s", diags.Err())
 			}
@@ -162,7 +166,7 @@ terraform {}
 				t.Fatalf("unexpected NewContext errors: %s", diags.Err())
 			}
 
-			diags = c.Validate(mod)
+			diags = c.Validate(context.Background(), mod)
 			if diags.HasErrors() != tc.Err {
 				t.Fatalf("err: %s", diags.Err())
 			}
@@ -207,8 +211,8 @@ resource "implicit_thing" "b" {
 	// require doing some pretty weird things that aren't common enough to
 	// be worth the complexity to check for them.
 
-	validateDiags := ctx.Validate(cfg)
-	_, planDiags := ctx.Plan(cfg, nil, DefaultPlanOpts)
+	validateDiags := ctx.Validate(context.Background(), cfg)
+	_, planDiags := ctx.Plan(context.Background(), cfg, nil, DefaultPlanOpts)
 
 	tests := map[string]tfdiags.Diagnostics{
 		"validate": validateDiags,
@@ -250,13 +254,15 @@ resource "implicit_thing" "b" {
 	}
 }
 
-func testContext2(t *testing.T, opts *ContextOpts) *Context {
+func testContext2(t testing.TB, opts *ContextOpts) *Context {
 	t.Helper()
 
 	ctx, diags := NewContext(opts)
 	if diags.HasErrors() {
 		t.Fatalf("failed to create test context\n\n%s\n", diags.Err())
 	}
+
+	ctx.encryption = encryption.Disabled()
 
 	return ctx
 }
@@ -667,6 +673,19 @@ func testProviderSchema(name string) *providers.GetProviderSchemaResponse {
 					},
 				},
 			},
+			name + "_sensitive_data_source": {
+				Attributes: map[string]*configschema.Attribute{
+					"id": {
+						Type:     cty.String,
+						Computed: true,
+					},
+					"value": {
+						Type:      cty.String,
+						Optional:  true,
+						Sensitive: true,
+					},
+				},
+			},
 		},
 	})
 }
@@ -714,17 +733,17 @@ func contextOptsForPlanViaFile(t *testing.T, configSnap *configload.Snapshot, pl
 		PreviousRunStateFile: prevStateFile,
 		StateFile:            stateFile,
 		Plan:                 plan,
-	})
+	}, encryption.PlanEncryptionDisabled())
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	pr, err := planfile.Open(filename)
+	pr, err := planfile.Open(filename, encryption.PlanEncryptionDisabled())
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	config, diags := pr.ReadConfig()
+	config, diags := pr.ReadConfig(configs.RootModuleCallForTesting())
 	if diags.HasErrors() {
 		return nil, nil, nil, diags.Err()
 	}
@@ -744,7 +763,7 @@ func contextOptsForPlanViaFile(t *testing.T, configSnap *configload.Snapshot, pl
 }
 
 // legacyPlanComparisonString produces a string representation of the changes
-// from a plan and a given state togther, as was formerly produced by the
+// from a plan and a given state together, as was formerly produced by the
 // String method of tofu.Plan.
 //
 // This is here only for compatibility with existing tests that predate our
@@ -933,7 +952,7 @@ func legacyDiffComparisonString(changes *plans.Changes) string {
 
 // assertNoDiagnostics fails the test in progress (using t.Fatal) if the given
 // diagnostics is non-empty.
-func assertNoDiagnostics(t *testing.T, diags tfdiags.Diagnostics) {
+func assertNoDiagnostics(t testing.TB, diags tfdiags.Diagnostics) {
 	t.Helper()
 	if len(diags) == 0 {
 		return
@@ -944,7 +963,7 @@ func assertNoDiagnostics(t *testing.T, diags tfdiags.Diagnostics) {
 
 // assertNoDiagnostics fails the test in progress (using t.Fatal) if the given
 // diagnostics has any errors.
-func assertNoErrors(t *testing.T, diags tfdiags.Diagnostics) {
+func assertNoErrors(t testing.TB, diags tfdiags.Diagnostics) {
 	t.Helper()
 	if !diags.HasErrors() {
 		return
@@ -961,7 +980,7 @@ func assertNoErrors(t *testing.T, diags tfdiags.Diagnostics) {
 // assertDiagnosticsMatch sorts the two sets of diagnostics in the usual way
 // before comparing them, though diagnostics only have a partial order so that
 // will not totally normalize the ordering of all diagnostics sets.
-func assertDiagnosticsMatch(t *testing.T, got, want tfdiags.Diagnostics) {
+func assertDiagnosticsMatch(t testing.TB, got, want tfdiags.Diagnostics) {
 	got = got.ForRPC()
 	want = want.ForRPC()
 	got.Sort()
@@ -976,7 +995,7 @@ func assertDiagnosticsMatch(t *testing.T, got, want tfdiags.Diagnostics) {
 // a test. It does not generate any errors or fail the test. See
 // assertNoDiagnostics and assertNoErrors for more specific helpers that can
 // also fail the test.
-func logDiagnostics(t *testing.T, diags tfdiags.Diagnostics) {
+func logDiagnostics(t testing.TB, diags tfdiags.Diagnostics) {
 	t.Helper()
 	for _, diag := range diags {
 		desc := diag.Description()

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 //go:build tools
@@ -11,6 +13,7 @@ package tools
 // Go toolchain to see that we need to include them in go.mod and go.sum.
 
 import (
+	_ "github.com/hashicorp/copywrite"
 	_ "github.com/nishanths/exhaustive/cmd/exhaustive"
 	_ "golang.org/x/tools/cmd/stringer"
 	_ "honnef.co/go/tools/cmd/staticcheck"

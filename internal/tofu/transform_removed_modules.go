@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -31,7 +33,8 @@ func (t *RemovedModuleTransformer) Transform(g *Graph) error {
 		if cc != nil {
 			continue
 		}
-		removed[m.Addr.Module().String()] = m.Addr.Module()
+		mod := m.Addr.Module()
+		removed[mod.String()] = mod
 		log.Printf("[DEBUG] %s is no longer in configuration\n", m.Addr)
 	}
 

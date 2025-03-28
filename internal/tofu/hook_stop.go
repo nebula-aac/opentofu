@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -87,6 +89,14 @@ func (h *stopHook) PreApplyImport(addr addrs.AbsResourceInstance, importing plan
 }
 
 func (h *stopHook) PostApplyImport(addr addrs.AbsResourceInstance, importing plans.ImportingSrc) (HookAction, error) {
+	return h.hook()
+}
+
+func (h *stopHook) PreApplyForget(_ addrs.AbsResourceInstance) (HookAction, error) {
+	return h.hook()
+}
+
+func (h *stopHook) PostApplyForget(_ addrs.AbsResourceInstance) (HookAction, error) {
 	return h.hook()
 }
 

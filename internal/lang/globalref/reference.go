@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package globalref
@@ -113,7 +115,7 @@ func (r Reference) ResourceInstance() (addrs.AbsResourceInstance, bool) {
 }
 
 // DebugString returns an internal (but still somewhat OpenTofu-language-like)
-// compact string representation of the reciever, which isn't an address that
+// compact string representation of the receiver, which isn't an address that
 // any of our usual address parsers could accept but still captures the
 // essence of what the reference represents.
 //

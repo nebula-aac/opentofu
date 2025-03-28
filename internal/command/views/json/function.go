@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package json
@@ -11,7 +13,7 @@ import (
 )
 
 // Function is a description of the JSON representation of the signature of
-// a function callable from the Terraform language.
+// a function callable from the OpenTofu language.
 type Function struct {
 	// Name is the leaf name of the function, without any namespace prefix.
 	Name string `json:"name"`

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -16,7 +18,6 @@ func TestGraphDot(t *testing.T) {
 		Graph  testGraphFunc
 		Opts   dag.DotOpts
 		Expect string
-		Error  string
 	}{
 		{
 			Name:  "empty",
@@ -234,23 +235,7 @@ digraph {
 		tn := tc.Name
 		t.Run(tn, func(t *testing.T) {
 			g := tc.Graph()
-			var err error
-			//actual, err := GraphDot(g, &tc.Opts)
 			actual := string(g.Dot(&tc.Opts))
-
-			if err == nil && tc.Error != "" {
-				t.Fatalf("%s: expected err: %s, got none", tn, tc.Error)
-			}
-			if err != nil && tc.Error == "" {
-				t.Fatalf("%s: unexpected err: %s", tn, err)
-			}
-			if err != nil && tc.Error != "" {
-				if !strings.Contains(err.Error(), tc.Error) {
-					t.Fatalf("%s: expected err: %s\nto contain: %s", tn, err, tc.Error)
-				}
-				return
-			}
-
 			expected := strings.TrimSpace(tc.Expect) + "\n"
 			if actual != expected {
 				t.Fatalf("%s:\n\nexpected:\n%s\n\ngot:\n%s", tn, expected, actual)

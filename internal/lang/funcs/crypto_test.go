@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package funcs
@@ -99,7 +101,7 @@ func TestBase64Sha256(t *testing.T) {
 			cty.StringVal("n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg="),
 			false,
 		},
-		// This would differ because we're base64-encoding hex represantiation, not raw bytes.
+		// This would differ because we're base64-encoding hex representation, not raw bytes.
 		// base64encode(sha256("test")) =
 		// "OWY4NmQwODE4ODRjN2Q2NTlhMmZlYWEwYzU1YWQwMTVhM2JmNGYxYjJiMGI4MjJjZDE1ZDZjMTViMGYwMGEwOA=="
 	}
@@ -137,7 +139,7 @@ func TestFileBase64Sha256(t *testing.T) {
 		},
 		{
 			cty.StringVal("testdata/icon.png"),
-			cty.StringVal("47U1q9IZW093SmAzdC820Skpn8vHPvc8szud/Y3ezpo="),
+			cty.StringVal("bun9+lNwoWcTxEze5pVIDfsf+mPDMtVUKZp04RCLHTc="),
 			false,
 		},
 		{
@@ -180,7 +182,7 @@ func TestBase64Sha512(t *testing.T) {
 			cty.StringVal("7iaw3Ur350mqGo7jwQrpkj9hiYB3Lkc/iBml1JQODbJ6wYX4oOHV+E+IvIh/1nsUNzLDBMxfqa2Ob1f1ACio/w=="),
 			false,
 		},
-		// This would differ because we're base64-encoding hex represantiation, not raw bytes
+		// This would differ because we're base64-encoding hex representation, not raw bytes
 		// base64encode(sha512("test")) =
 		// "OZWUyNmIwZGQ0YWY3ZTc0OWFhMWE4ZWUzYzEwYWU5OTIzZjYxODk4MDc3MmU0NzNmODgxOWE1ZDQ5NDBlMGRiMjdhYzE4NWY4YTBlMWQ1Zjg0Zjg4YmM4ODdmZDY3YjE0MzczMmMzMDRjYzVmYTlhZDhlNmY1N2Y1MDAyOGE4ZmY="
 	}
@@ -218,7 +220,7 @@ func TestFileBase64Sha512(t *testing.T) {
 		},
 		{
 			cty.StringVal("testdata/icon.png"),
-			cty.StringVal("wSInO/tKEOaLGCAY2h/7gtLWMpzyLJ0ijFh95JTpYrPzXQYgviAdL9ZgpD9EAte8On+drvhFvjIFsfQUwxbNPQ=="),
+			cty.StringVal("9FcRPvMPKG/8OO+zJpVnl3NZXBQEwOh3bBfrSh0boTkYvo6pq3xidR6ZuG/6rPnE0p7+rTYRfD3AVxdst62n9g=="),
 			false,
 		},
 		{
@@ -336,7 +338,7 @@ func TestFileMD5(t *testing.T) {
 		},
 		{
 			cty.StringVal("testdata/icon.png"),
-			cty.StringVal("d7e6c283185a1078c58213beadca98b0"),
+			cty.StringVal("a18e1dd95427740ff7c7654ecc0280ad"),
 			false,
 		},
 		{
@@ -493,7 +495,7 @@ func TestFileSHA1(t *testing.T) {
 		},
 		{
 			cty.StringVal("testdata/icon.png"),
-			cty.StringVal("2821bcc8379e1bd6f4f31b1e6a1fbb204b4a8be8"),
+			cty.StringVal("90ecc70d12bc0bca6efa8d5cc8b35091fb087686"),
 			false,
 		},
 		{
@@ -571,7 +573,7 @@ func TestFileSHA256(t *testing.T) {
 		},
 		{
 			cty.StringVal("testdata/icon.png"),
-			cty.StringVal("e3b535abd2195b4f774a6033742f36d129299fcbc73ef73cb33b9dfd8ddece9a"),
+			cty.StringVal("6ee9fdfa5370a16713c44cdee695480dfb1ffa63c332d554299a74e1108b1d37"),
 			false,
 		},
 		{
@@ -649,7 +651,7 @@ func TestFileSHA512(t *testing.T) {
 		},
 		{
 			cty.StringVal("testdata/icon.png"),
-			cty.StringVal("c122273bfb4a10e68b182018da1ffb82d2d6329cf22c9d228c587de494e962b3f35d0620be201d2fd660a43f4402d7bc3a7f9daef845be3205b1f414c316cd3d"),
+			cty.StringVal("f457113ef30f286ffc38efb32695679773595c1404c0e8776c17eb4a1d1ba13918be8ea9ab7c62751e99b86ffaacf9c4d29efead36117c3dc057176cb7ada7f6"),
 			false,
 		},
 		{

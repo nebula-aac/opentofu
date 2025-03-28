@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package funcs
@@ -46,10 +48,8 @@ func TestSensitive(t *testing.T) {
 			``,
 		},
 		{
-			// A value with some non-standard mark gets "fixed" to be marked
-			// with the standard "sensitive" mark. (This situation occurring
-			// would imply an inconsistency/bug elsewhere, so we're just
-			// being robust about it here.)
+			// Any non-sensitive marks must be propagated alongside
+			// with a sensitive one.
 			cty.NumberIntVal(1).Mark("bloop"),
 			``,
 		},
@@ -81,15 +81,11 @@ func TestSensitive(t *testing.T) {
 				t.Errorf("result is not marked sensitive")
 			}
 
+			inputMarks := test.Input.Marks()
+			delete(inputMarks, marks.Sensitive)
+
 			gotRaw, gotMarks := got.Unmark()
-			if len(gotMarks) != 1 {
-				// We're only expecting to have the "sensitive" mark we checked
-				// above. Any others are an error, even if they happen to
-				// appear alongside "sensitive". (We might change this rule
-				// if someday we decide to use marks for some additional
-				// unrelated thing in OpenTofu, but currently we assume that
-				// _all_ marks imply sensitive, and so returning any other
-				// marks would be confusing.)
+			if len(gotMarks) != len(inputMarks)+1 {
 				t.Errorf("extraneous marks %#v", gotMarks)
 			}
 
@@ -130,16 +126,16 @@ func TestNonsensitive(t *testing.T) {
 			``,
 		},
 
-		// Passing a value that is already non-sensitive is an error,
-		// because this function should always be used with specific
-		// intention, not just as a "make everything visible" hammer.
+		// Passing a value that is already non-sensitive is not an error,
+		// as this function may be used with specific to ensure that all
+		// values are indeed non-sensitive
 		{
 			cty.NumberIntVal(1),
-			`the given value is not sensitive, so this call is redundant`,
+			``,
 		},
 		{
 			cty.NullVal(cty.String),
-			`the given value is not sensitive, so this call is redundant`,
+			``,
 		},
 
 		// Unknown values may become sensitive once they are known, so we
@@ -176,6 +172,60 @@ func TestNonsensitive(t *testing.T) {
 			wantRaw, _ := test.Input.Unmark()
 			if !got.RawEquals(wantRaw) {
 				t.Errorf("wrong result\ngot:  %#v\nwant: %#v", got, test.Input)
+			}
+		})
+	}
+}
+
+func TestIsSensitive(t *testing.T) {
+	tests := []struct {
+		Input       cty.Value
+		IsSensitive bool
+	}{
+		{
+			cty.NumberIntVal(1).Mark(marks.Sensitive),
+			true,
+		},
+		{
+			cty.NumberIntVal(1),
+			false,
+		},
+		{
+			cty.DynamicVal.Mark(marks.Sensitive),
+			true,
+		},
+		{
+			cty.DynamicVal,
+			false,
+		},
+		{
+			cty.UnknownVal(cty.String).Mark(marks.Sensitive),
+			true,
+		},
+		{
+			cty.UnknownVal(cty.String),
+			false,
+		},
+		{
+			cty.NullVal(cty.EmptyObject).Mark(marks.Sensitive),
+			true,
+		},
+		{
+			cty.NullVal(cty.EmptyObject),
+			false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(fmt.Sprintf("issensitive(%#v)", test.Input), func(t *testing.T) {
+			got, err := IsSensitive(test.Input)
+
+			if err != nil {
+				t.Fatalf("unexpected error: %s", err)
+			}
+
+			if got.Equals(cty.BoolVal(test.IsSensitive)).False() {
+				t.Errorf("wrong result\ngot:  %#v\nwant: %#v", got, cty.BoolVal(test.IsSensitive))
 			}
 		})
 	}

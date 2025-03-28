@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package plugin
@@ -46,8 +48,8 @@ type GRPCProvisioner struct {
 	client proto.ProvisionerClient
 	ctx    context.Context
 
+	mu sync.Mutex
 	// Cache the schema since we need it for serialization in each method call.
-	mu     sync.Mutex
 	schema *configschema.Block
 }
 

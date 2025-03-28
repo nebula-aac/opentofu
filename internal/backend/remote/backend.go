@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package remote
@@ -23,6 +25,7 @@ import (
 	"github.com/mitchellh/colorstring"
 	"github.com/opentofu/opentofu/internal/backend"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/httpclient"
 	"github.com/opentofu/opentofu/internal/logging"
 	"github.com/opentofu/opentofu/internal/states/remote"
@@ -39,7 +42,7 @@ const (
 	defaultParallelism = 10
 	stateServiceID     = "state.v2"
 	tfeServiceID       = "tfe.v2.1"
-	genericHostname    = "localterraform.com"
+	genericHostname    = "localtofu.com"
 )
 
 // Remote is an implementation of EnhancedBackend that performs all
@@ -93,6 +96,8 @@ type Remote struct {
 	// version. This will also cause VerifyWorkspaceTerraformVersion to return
 	// a warning diagnostic instead of an error.
 	ignoreVersionConflict bool
+
+	encryption encryption.StateEncryption
 }
 
 var _ backend.Backend = (*Remote)(nil)
@@ -100,14 +105,15 @@ var _ backend.Enhanced = (*Remote)(nil)
 var _ backend.Local = (*Remote)(nil)
 
 // New creates a new initialized remote backend.
-func New(services *disco.Disco) *Remote {
+func New(services *disco.Disco, enc encryption.StateEncryption) *Remote {
 	return &Remote{
-		services: services,
+		services:   services,
+		encryption: enc,
 	}
 }
 
 // ConfigSchema implements backend.Enhanced.
-func (b *Remote) ConfigSchema(context.Context) *configschema.Block {
+func (b *Remote) ConfigSchema() *configschema.Block {
 	return &configschema.Block{
 		Attributes: map[string]*configschema.Attribute{
 			"hostname": {
@@ -150,7 +156,7 @@ func (b *Remote) ConfigSchema(context.Context) *configschema.Block {
 }
 
 // PrepareConfig implements backend.Backend.
-func (b *Remote) PrepareConfig(ctx context.Context, obj cty.Value) (cty.Value, tfdiags.Diagnostics) {
+func (b *Remote) PrepareConfig(obj cty.Value) (cty.Value, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 	if obj.IsNull() {
 		return obj, diags
@@ -221,7 +227,7 @@ func (b *Remote) ServiceDiscoveryAliases() ([]backend.HostAlias, error) {
 }
 
 // Configure implements backend.Enhanced.
-func (b *Remote) Configure(ctx context.Context, obj cty.Value) tfdiags.Diagnostics {
+func (b *Remote) Configure(obj cty.Value) tfdiags.Diagnostics {
 	var diags tfdiags.Diagnostics
 	if obj.IsNull() {
 		return diags
@@ -353,7 +359,7 @@ func (b *Remote) Configure(ctx context.Context, obj cty.Value) tfdiags.Diagnosti
 	}
 
 	// Check if the organization exists by reading its entitlements.
-	entitlements, err := b.client.Organizations.ReadEntitlements(ctx, b.organization)
+	entitlements, err := b.client.Organizations.ReadEntitlements(context.Background(), b.organization)
 	if err != nil {
 		if err == tfe.ErrResourceNotFound {
 			err = fmt.Errorf("organization %q at host %s not found.\n\n"+
@@ -372,7 +378,7 @@ func (b *Remote) Configure(ctx context.Context, obj cty.Value) tfdiags.Diagnosti
 	}
 
 	// Configure a local backend for when we need to run operations locally.
-	b.local = backendLocal.NewWithBackend(b)
+	b.local = backendLocal.NewWithBackend(b, b.encryption)
 	b.forceLocal = b.forceLocal || !entitlements.Operations
 
 	// Enable retries for server errors as the backend is now fully configured.
@@ -550,15 +556,15 @@ func (b *Remote) retryLogHook(attemptNum int, resp *http.Response) {
 }
 
 // Workspaces implements backend.Enhanced.
-func (b *Remote) Workspaces(ctx context.Context) ([]string, error) {
+func (b *Remote) Workspaces() ([]string, error) {
 	if b.prefix == "" {
 		return nil, backend.ErrWorkspacesNotSupported
 	}
-	return b.workspaces(ctx)
+	return b.workspaces()
 }
 
 // workspaces returns a filtered list of remote workspace names.
-func (b *Remote) workspaces(ctx context.Context) ([]string, error) {
+func (b *Remote) workspaces() ([]string, error) {
 	options := &tfe.WorkspaceListOptions{}
 	switch {
 	case b.workspace != "":
@@ -571,7 +577,7 @@ func (b *Remote) workspaces(ctx context.Context) ([]string, error) {
 	var names []string
 
 	for {
-		wl, err := b.client.Workspaces.List(ctx, b.organization, options)
+		wl, err := b.client.Workspaces.List(context.Background(), b.organization, options)
 		if err != nil {
 			return nil, err
 		}
@@ -613,7 +619,7 @@ func (b *Remote) WorkspaceNamePattern() string {
 }
 
 // DeleteWorkspace implements backend.Enhanced.
-func (b *Remote) DeleteWorkspace(ctx context.Context, name string, _ bool) error {
+func (b *Remote) DeleteWorkspace(name string, _ bool) error {
 	if b.workspace == "" && name == backend.DefaultStateName {
 		return backend.ErrDefaultWorkspaceNotSupported
 	}
@@ -635,13 +641,14 @@ func (b *Remote) DeleteWorkspace(ctx context.Context, name string, _ bool) error
 		workspace: &tfe.Workspace{
 			Name: name,
 		},
+		encryption: b.encryption,
 	}
 
-	return client.Delete(ctx)
+	return client.Delete()
 }
 
 // StateMgr implements backend.Enhanced.
-func (b *Remote) StateMgr(ctx context.Context, name string) (statemgr.Full, error) {
+func (b *Remote) StateMgr(name string) (statemgr.Full, error) {
 	if b.workspace == "" && name == backend.DefaultStateName {
 		return nil, backend.ErrDefaultWorkspaceNotSupported
 	}
@@ -657,7 +664,7 @@ func (b *Remote) StateMgr(ctx context.Context, name string) (statemgr.Full, erro
 		name = b.prefix + name
 	}
 
-	workspace, err := b.client.Workspaces.Read(ctx, b.organization, name)
+	workspace, err := b.client.Workspaces.Read(context.Background(), b.organization, name)
 	if err != nil && err != tfe.ErrResourceNotFound {
 		return nil, fmt.Errorf("Failed to retrieve workspace %s: %w", name, err)
 	}
@@ -673,7 +680,7 @@ func (b *Remote) StateMgr(ctx context.Context, name string) (statemgr.Full, erro
 			options.TerraformVersion = tfe.String(tfversion.String())
 		}
 
-		workspace, err = b.client.Workspaces.Create(ctx, b.organization, options)
+		workspace, err = b.client.Workspaces.Create(context.Background(), b.organization, options)
 		if err != nil {
 			return nil, fmt.Errorf("Error creating workspace %s: %w", name, err)
 		}
@@ -700,11 +707,12 @@ func (b *Remote) StateMgr(ctx context.Context, name string) (statemgr.Full, erro
 
 		// This is optionally set during OpenTofu Enterprise runs.
 		runID: os.Getenv("TFE_RUN_ID"),
+
+		encryption: b.encryption,
 	}
 
-	return &remote.State{
-		Client: client,
-
+	state := remote.NewState(client, b.encryption)
+	if client.runID != "" {
 		// client.runID will be set if we're running a Terraform Cloud
 		// or Terraform Enterprise remote execution environment, in which
 		// case we'll disable intermediate snapshots to avoid extra storage
@@ -712,8 +720,9 @@ func (b *Remote) StateMgr(ctx context.Context, name string) (statemgr.Full, erro
 		// Other implementations of the remote state protocol should not run
 		// in contexts where there's a "TFE Run ID" and so are not affected
 		// by this special case.
-		DisableIntermediateSnapshots: client.runID != "",
-	}, nil
+		state.DisableIntermediateSnapshots()
+	}
+	return state, nil
 }
 
 func isLocalExecutionMode(execMode string) bool {
@@ -799,7 +808,7 @@ func (b *Remote) Operation(ctx context.Context, op *backend.Operation) (*backend
 	b.opLock.Lock()
 
 	// Build our running operation
-	// the runninCtx is only used to block until the operation returns.
+	// the runningCtx is only used to block until the operation returns.
 	runningCtx, done := context.WithCancel(context.Background())
 	runningOp := &backend.RunningOperation{
 		Context:   runningCtx,
@@ -815,9 +824,11 @@ func (b *Remote) Operation(ctx context.Context, op *backend.Operation) (*backend
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	runningOp.Cancel = cancel
 
+	panicHandler := logging.PanicHandlerWithTraceFn()
+
 	// Do it.
 	go func() {
-		defer logging.PanicHandler()
+		defer panicHandler()
 		defer done()
 		defer stop()
 		defer cancel()
@@ -890,7 +901,7 @@ func (b *Remote) cancel(cancelCtx context.Context, op *backend.Operation, r *tfe
 			}
 		} else {
 			if b.CLI != nil {
-				// Insert a blank line to separate the ouputs.
+				// Insert a blank line to separate the outputs.
 				b.CLI.Output("")
 			}
 		}
@@ -923,10 +934,10 @@ func (b *Remote) IgnoreVersionConflict() {
 // that there are no compatibility concerns, so it returns no diagnostics.
 //
 // If the versions differ,
-func (b *Remote) VerifyWorkspaceTerraformVersion(ctx context.Context, workspaceName string) tfdiags.Diagnostics {
+func (b *Remote) VerifyWorkspaceTerraformVersion(workspaceName string) tfdiags.Diagnostics {
 	var diags tfdiags.Diagnostics
 
-	workspace, err := b.getRemoteWorkspace(ctx, workspaceName)
+	workspace, err := b.getRemoteWorkspace(context.Background(), workspaceName)
 	if err != nil {
 		// If the workspace doesn't exist, there can be no compatibility
 		// problem, so we can return. This is most likely to happen when

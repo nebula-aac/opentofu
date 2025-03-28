@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -40,6 +42,14 @@ type GraphNodeReferencer interface {
 	// include both a referenced address and source location information for
 	// the reference.
 	References() []*addrs.Reference
+}
+
+// GraphNodeRootReferencer is implemented by nodes that reference the root
+// module, for example module imports
+type GraphNodeRootReferencer interface {
+	GraphNodeReferencer
+
+	RootReferences() []*addrs.Reference
 }
 
 type GraphNodeAttachDependencies interface {
@@ -295,40 +305,57 @@ func (m ReferenceMap) References(v dag.Vertex) []dag.Vertex {
 
 	var matches []dag.Vertex
 
-	for _, ref := range rn.References() {
-		subject := ref.Subject
-
-		key := m.referenceMapKey(v, subject)
-		if _, exists := m[key]; !exists {
-			// If what we were looking for was a ResourceInstance then we
-			// might be in a resource-oriented graph rather than an
-			// instance-oriented graph, and so we'll see if we have the
-			// resource itself instead.
-			switch ri := subject.(type) {
-			case addrs.ResourceInstance:
-				subject = ri.ContainingResource()
-			case addrs.ResourceInstancePhase:
-				subject = ri.ContainingResource()
-			case addrs.ModuleCallInstanceOutput:
-				subject = ri.ModuleCallOutput()
-			case addrs.ModuleCallInstance:
-				subject = ri.Call
-			default:
-				log.Printf("[INFO] ReferenceTransformer: reference not found: %q", subject)
-				continue
-			}
-			key = m.referenceMapKey(v, subject)
-		}
-		vertices := m[key]
-		for _, rv := range vertices {
-			// don't include self-references
-			if rv == v {
-				continue
-			}
-			matches = append(matches, rv)
+	if rrn, ok := rn.(GraphNodeRootReferencer); ok {
+		for _, ref := range rrn.RootReferences() {
+			matches = append(matches, m.addReference(addrs.RootModule, v, ref)...)
 		}
 	}
 
+	for _, ref := range rn.References() {
+		matches = append(matches, m.addReference(vertexReferencePath(v), v, ref)...)
+	}
+
+	return matches
+}
+
+// addReference returns the set of vertices that the given reference requires
+// within a given module.  It additionally excludes the current vertex.
+func (m ReferenceMap) addReference(path addrs.Module, current dag.Vertex, ref *addrs.Reference) []dag.Vertex {
+	var matches []dag.Vertex
+
+	subject := ref.Subject
+
+	key := m.mapKey(path, subject)
+	if _, exists := m[key]; !exists {
+		// If what we were looking for was a ResourceInstance then we
+		// might be in a resource-oriented graph rather than an
+		// instance-oriented graph, and so we'll see if we have the
+		// resource itself instead.
+		switch ri := subject.(type) {
+		case addrs.ResourceInstance:
+			subject = ri.ContainingResource()
+		case addrs.ResourceInstancePhase:
+			subject = ri.ContainingResource()
+		case addrs.ModuleCallInstanceOutput:
+			subject = ri.ModuleCallOutput()
+		case addrs.ModuleCallInstance:
+			subject = ri.Call
+		case addrs.ProviderFunction:
+			return nil
+		default:
+			log.Printf("[INFO] ReferenceTransformer: reference not found: %q", subject)
+			return nil
+		}
+		key = m.mapKey(path, subject)
+	}
+	vertices := m[key]
+	for _, rv := range vertices {
+		// don't include self-references
+		if rv == current {
+			continue
+		}
+		matches = append(matches, rv)
+	}
 	return matches
 }
 
@@ -408,6 +435,8 @@ func (m ReferenceMap) dataDependsOn(depender graphNodeDependsOn) []*addrs.Refere
 			case addrs.ResourceInstance:
 				resAddr = s.Resource
 				r.Subject = resAddr
+			case addrs.ProviderFunction:
+				continue
 			}
 
 			if resAddr.Mode != addrs.ManagedResourceMode {

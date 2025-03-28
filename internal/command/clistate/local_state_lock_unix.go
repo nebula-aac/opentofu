@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 //go:build !windows
@@ -12,7 +14,7 @@ import (
 )
 
 // use fcntl POSIX locks for the most consistent behavior across platforms, and
-// hopefully some campatibility over NFS and CIFS.
+// hopefully some compatibility over NFS and CIFS.
 func (s *LocalState) lock() error {
 	flock := &syscall.Flock_t{
 		Type:   syscall.F_RDLCK | syscall.F_WRLCK,

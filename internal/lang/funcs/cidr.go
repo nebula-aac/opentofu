@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package funcs
@@ -14,7 +16,7 @@ import (
 	"github.com/zclconf/go-cty/cty/gocty"
 )
 
-// CidrHostFunc contructs a function that calculates a full host IP address
+// CidrHostFunc constructs a function that calculates a full host IP address
 // within a given IP network address prefix.
 var CidrHostFunc = function.New(&function.Spec{
 	Params: []function.Parameter{
@@ -48,7 +50,7 @@ var CidrHostFunc = function.New(&function.Spec{
 	},
 })
 
-// CidrNetmaskFunc contructs a function that converts an IPv4 address prefix given
+// CidrNetmaskFunc constructs a function that converts an IPv4 address prefix given
 // in CIDR notation into a subnet mask address.
 var CidrNetmaskFunc = function.New(&function.Spec{
 	Params: []function.Parameter{
@@ -73,7 +75,7 @@ var CidrNetmaskFunc = function.New(&function.Spec{
 	},
 })
 
-// CidrSubnetFunc contructs a function that calculates a subnet address within
+// CidrSubnetFunc constructs a function that calculates a subnet address within
 // a given IP network address prefix.
 var CidrSubnetFunc = function.New(&function.Spec{
 	Params: []function.Parameter{
@@ -197,6 +199,77 @@ var CidrSubnetsFunc = function.New(&function.Spec{
 	},
 })
 
+// CidrContainsFunc constructs a function that checks whether a given IP address
+// is within a given IP network address prefix.
+var CidrContainsFunc = function.New(&function.Spec{
+	Params: []function.Parameter{
+		{
+			Name: "containing_prefix",
+			Type: cty.String,
+		},
+		{
+			Name: "contained_ip_or_prefix",
+			Type: cty.String,
+		},
+	},
+	Type: function.StaticReturnType(cty.Bool),
+	Impl: func(args []cty.Value, retType cty.Type) (ret cty.Value, err error) {
+		prefix := args[0].AsString()
+		addr := args[1].AsString()
+
+		// The first argument must be a CIDR prefix.
+		_, containing, err := ipaddr.ParseCIDR(prefix)
+		if err != nil {
+			return cty.UnknownVal(cty.Bool), err
+		}
+
+		// The second argument can be either an IP address or a CIDR prefix.
+		// We will try parsing it as an IP address first.
+		startIP := ipaddr.ParseIP(addr)
+		var endIP ipaddr.IP
+
+		// If the second argument did not parse as an IP, we will try parsing it
+		// as a CIDR prefix.
+		if startIP == nil {
+			_, contained, err := ipaddr.ParseCIDR(addr)
+
+			// If that also fails, we'll return an error.
+			if err != nil {
+				return cty.UnknownVal(cty.Bool), fmt.Errorf("invalid IP address or prefix: %s", addr)
+			}
+
+			// Otherwise, we will want to know the start and the end IP of the
+			// prefix, so that we can check whether both are contained in the
+			// containing prefix.
+			startIP, endIP = cidr.AddressRange(contained)
+		}
+
+		// We require that both addresses are of the same type, so that
+		// we can't accidentally compare an IPv4 address to an IPv6 prefix.
+		// The underlying Go function will always return false if this happens,
+		// but we want to return an error instead so that the caller can
+		// distinguish between a "legitimate" false result and an erroneous
+		// check.
+		if (startIP.To4() == nil) != (containing.IP.To4() == nil) {
+			return cty.UnknownVal(cty.Bool), fmt.Errorf("address family mismatch: %s vs. %s", prefix, addr)
+		}
+
+		// If the second argument was an IP address, we will check whether it
+		// is contained in the containing prefix, and that's our result.
+		result := containing.Contains(startIP)
+
+		// If the second argument was a CIDR prefix, we will also check whether
+		// the end IP of the prefix is contained in the containing prefix.
+		// Once CIDR is contained in another CIDR iff both the start and the
+		// end IP of the contained CIDR are contained in the containing CIDR.
+		if endIP != nil {
+			result = result && containing.Contains(endIP)
+		}
+
+		return cty.BoolVal(result), nil
+	},
+})
+
 // CidrHost calculates a full host IP address within a given IP network address prefix.
 func CidrHost(prefix, hostnum cty.Value) (cty.Value, error) {
 	return CidrHostFunc.Call([]cty.Value{prefix, hostnum})
@@ -219,4 +292,9 @@ func CidrSubnets(prefix cty.Value, newbits ...cty.Value) (cty.Value, error) {
 	args[0] = prefix
 	copy(args[1:], newbits)
 	return CidrSubnetsFunc.Call(args)
+}
+
+// CidrContains checks whether a given IP address is within a given IP network address prefix.
+func CidrContains(prefix, address cty.Value) (cty.Value, error) {
+	return CidrContainsFunc.Call([]cty.Value{prefix, address})
 }

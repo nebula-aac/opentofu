@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 syntax = "proto3";
@@ -64,6 +66,11 @@ message Plan {
     // configuration.
     repeated string target_addrs = 5;
 
+    // An unordered set of exclude addresses to exclude when applying. If no
+    // target addresses are present, the plan applies to the whole
+    // configuration.
+    repeated string exclude_addrs = 6;
+
     // An unordered set of force-replace addresses to include when applying.
     // This must match the set of addresses that was used when creating the
     // plan, or else applying the plan will fail when it reaches a different
@@ -114,6 +121,7 @@ enum Action {
     DELETE = 5;
     DELETE_THEN_CREATE = 6;
     CREATE_THEN_DELETE = 7;
+    FORGET = 8;
 }
 
 // Change represents a change made to some object, transforming it from an old
@@ -188,7 +196,7 @@ message ResourceInstanceChange {
     string prev_run_addr = 14;
 
     // NOTE: Earlier versions of this format had fields 1 through 6 describing
-    // various indivdual parts of "addr". We're now using our standard compact
+    // various individual parts of "addr". We're now using our standard compact
     // string representation to capture the same information. We don't support
     // preserving plan files from one OpenTofu version to the next, so we
     // no longer declare nor accept those fields.
@@ -204,7 +212,7 @@ message ResourceInstanceChange {
     string provider = 8;
 
     // Description of the proposed change. May use "create", "read", "update",
-    // "replace", "delete" and "no-op" actions.
+    // "replace", "delete", "forget" and "no-op" actions.
     Change change = 9;
 
     // raw blob value provided by the provider as additional context for the

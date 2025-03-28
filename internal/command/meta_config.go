@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -6,6 +8,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/opentofu/opentofu/internal/addrs"
 	"github.com/opentofu/opentofu/internal/configs"
 	"github.com/opentofu/opentofu/internal/configs/configload"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
@@ -48,7 +52,13 @@ func (m *Meta) loadConfig(rootDir string) (*configs.Config, tfdiags.Diagnostics)
 		return nil, diags
 	}
 
-	config, hclDiags := loader.LoadConfig(rootDir)
+	call, callDiags := m.rootModuleCall(rootDir)
+	diags = diags.Append(callDiags)
+	if callDiags.HasErrors() {
+		return nil, diags
+	}
+
+	config, hclDiags := loader.LoadConfig(rootDir, call)
 	diags = diags.Append(hclDiags)
 	return config, diags
 }
@@ -65,7 +75,13 @@ func (m *Meta) loadConfigWithTests(rootDir, testDir string) (*configs.Config, tf
 		return nil, diags
 	}
 
-	config, hclDiags := loader.LoadConfigWithTests(rootDir, testDir)
+	call, vDiags := m.rootModuleCall(rootDir)
+	diags = diags.Append(vDiags)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	config, hclDiags := loader.LoadConfigWithTests(rootDir, testDir, call)
 	diags = diags.Append(hclDiags)
 	return config, diags
 }
@@ -78,7 +94,7 @@ func (m *Meta) loadConfigWithTests(rootDir, testDir string) (*configs.Config, tf
 // initialization use-cases where the root module must be inspected in order
 // to determine what else needs to be installed before the full configuration
 // can be used.
-func (m *Meta) loadSingleModule(dir string) (*configs.Module, tfdiags.Diagnostics) {
+func (m *Meta) loadSingleModule(dir string, load configs.SelectiveLoader) (*configs.Module, tfdiags.Diagnostics) {
 	var diags tfdiags.Diagnostics
 	dir = m.normalizePath(dir)
 
@@ -88,9 +104,77 @@ func (m *Meta) loadSingleModule(dir string) (*configs.Module, tfdiags.Diagnostic
 		return nil, diags
 	}
 
-	module, hclDiags := loader.Parser().LoadConfigDir(dir)
+	call, vDiags := m.rootModuleCall(dir)
+	diags = diags.Append(vDiags)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	module, hclDiags := loader.Parser().LoadConfigDirSelective(dir, call, load)
 	diags = diags.Append(hclDiags)
 	return module, diags
+}
+
+func (m *Meta) rootModuleCall(rootDir string) (configs.StaticModuleCall, tfdiags.Diagnostics) {
+	if m.rootModuleCallCache != nil {
+		return *m.rootModuleCallCache, nil
+	}
+	variables, diags := m.collectVariableValues()
+
+	workspace, err := m.Workspace()
+	if err != nil {
+		diags = diags.Append(err)
+	}
+
+	call := configs.NewStaticModuleCall(addrs.RootModule, func(variable *configs.Variable) (cty.Value, hcl.Diagnostics) {
+		name := variable.Name
+		v, ok := variables[name]
+		if !ok {
+			if variable.Required() {
+				// User prompts are best efforts, so we accept the input here
+				// and rely on downstream checks to validate it
+				rawVal, err := m.getInput(context.Background(), variable)
+				if err != nil {
+					return cty.NilVal, hcl.Diagnostics{&hcl.Diagnostic{
+						Severity: hcl.DiagError,
+						Summary:  fmt.Sprintf("Failed to request input from user for variable var.%s", variable.Name),
+						Subject:  variable.DeclRange.Ptr(),
+					}}
+				}
+				v = unparsedVariableValueString{
+					str:        rawVal,
+					name:       name,
+					sourceType: tofu.ValueFromInput,
+				}
+				m.updateInputVariableCache(name, v)
+			} else {
+				return variable.Default, nil
+			}
+		}
+
+		parsed, parsedDiags := v.ParseVariableValue(variable.ParsingMode)
+		return parsed.Value, parsedDiags.ToHCL()
+	}, rootDir, workspace)
+	m.rootModuleCallCache = &call
+	return call, diags
+}
+
+func (m *Meta) getInput(ctx context.Context, variable *configs.Variable) (string, error) {
+	if !m.Input() {
+		return "", fmt.Errorf("input is disabled")
+	}
+	uiInput := m.UIInput()
+	rawValue, err := uiInput.Input(ctx, &tofu.InputOpts{
+		Id:          fmt.Sprintf("var.%s", variable.Name),
+		Query:       fmt.Sprintf("var.%s", variable.Name),
+		Description: variable.Description,
+		Secret:      variable.Sensitive,
+	})
+	if err != nil {
+		log.Printf("[TRACE] Meta.getInput Failed to prompt for %s: %s", variable.Name, err)
+		return "", err
+	}
+	return rawValue, nil
 }
 
 // loadSingleModuleWithTests matches loadSingleModule except it also loads any
@@ -105,7 +189,13 @@ func (m *Meta) loadSingleModuleWithTests(dir string, testDir string) (*configs.M
 		return nil, diags
 	}
 
-	module, hclDiags := loader.Parser().LoadConfigDirWithTests(dir, testDir)
+	call, vDiags := m.rootModuleCall(dir)
+	diags = diags.Append(vDiags)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	module, hclDiags := loader.Parser().LoadConfigDirWithTests(dir, testDir, call)
 	diags = diags.Append(hclDiags)
 	return module, diags
 }
@@ -114,7 +204,7 @@ func (m *Meta) loadSingleModuleWithTests(dir string, testDir string) (*configs.M
 // least one OpenTofu configuration file (.tf or .tf.json), returning true
 // if so.
 //
-// In the unlikely event that the underlying config loader cannot be initalized,
+// In the unlikely event that the underlying config loader cannot be initialized,
 // this function optimistically returns true, assuming that the caller will
 // then do some other operation that requires the config loader and get an
 // error at that point.
@@ -142,7 +232,7 @@ func (m *Meta) dirIsConfigPath(dir string) bool {
 // that a call to loadSingleModule or loadConfig could fail on the same
 // directory even if loadBackendConfig succeeded.)
 func (m *Meta) loadBackendConfig(rootDir string) (*configs.Backend, tfdiags.Diagnostics) {
-	mod, diags := m.loadSingleModule(rootDir)
+	mod, diags := m.loadSingleModule(rootDir, configs.SelectiveLoadBackend)
 
 	// Only return error diagnostics at this point. Any warnings will be caught
 	// again later and duplicated in the output.
@@ -203,7 +293,13 @@ func (m *Meta) installModules(ctx context.Context, rootDir, testsDir string, upg
 
 	inst := initwd.NewModuleInstaller(m.modulesDir(), loader, m.registryClient())
 
-	_, moreDiags := inst.InstallModules(ctx, rootDir, testsDir, upgrade, installErrsOnly, hooks)
+	call, vDiags := m.rootModuleCall(rootDir)
+	diags = diags.Append(vDiags)
+	if diags.HasErrors() {
+		return true, diags
+	}
+
+	_, moreDiags := inst.InstallModules(ctx, rootDir, testsDir, upgrade, installErrsOnly, hooks, call)
 	diags = diags.Append(moreDiags)
 
 	if ctx.Err() == context.Canceled {
@@ -311,7 +407,7 @@ func (m *Meta) inputForSchema(given cty.Value, schema *configschema.Block) (cty.
 //
 // If a config loader has not yet been instantiated then no files could have
 // been loaded already, so this method returns a nil map in that case.
-func (m *Meta) configSources() map[string][]byte {
+func (m *Meta) configSources() map[string]*hcl.File {
 	if m.configLoader == nil {
 		return nil
 	}
@@ -368,7 +464,7 @@ func (m *Meta) initConfigLoader() (*configload.Loader, error) {
 	return m.configLoader, nil
 }
 
-// registryClient instantiates and returns a new Terraform Registry client.
+// registryClient instantiates and returns a new Registry client.
 func (m *Meta) registryClient() *registry.Client {
 	return registry.NewClient(m.Services, nil)
 }

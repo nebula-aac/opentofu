@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -61,7 +63,7 @@ func TestBuildingEvalContextInitProvider(t *testing.T) {
 	ctx := testBuiltinEvalContext(t)
 	ctx = ctx.WithPath(addrs.RootModuleInstance).(*BuiltinEvalContext)
 	ctx.ProviderLock = &lock
-	ctx.ProviderCache = make(map[string]providers.Interface)
+	ctx.ProviderCache = make(map[string]map[addrs.InstanceKey]providers.Interface)
 	ctx.Plugins = newContextPlugins(map[addrs.Provider]providers.Factory{
 		addrs.NewDefaultProvider("test"): providers.FactoryFixed(testP),
 	}, nil)
@@ -76,11 +78,11 @@ func TestBuildingEvalContextInitProvider(t *testing.T) {
 		Alias:    "foo",
 	}
 
-	_, err := ctx.InitProvider(providerAddrDefault)
+	_, err := ctx.InitProvider(providerAddrDefault, addrs.NoKey)
 	if err != nil {
 		t.Fatalf("error initializing provider test: %s", err)
 	}
-	_, err = ctx.InitProvider(providerAddrAlias)
+	_, err = ctx.InitProvider(providerAddrAlias, addrs.NoKey)
 	if err != nil {
 		t.Fatalf("error initializing provider test.foo: %s", err)
 	}

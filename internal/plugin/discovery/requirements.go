@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package discovery
@@ -9,7 +11,7 @@ import (
 
 // PluginInstallProtocolVersion is the protocol version TF-core
 // supports to communicate with servers, and is used to resolve
-// plugin discovery with terraform registry, in addition to
+// plugin discovery with OpenTofu registry, in addition to
 // any specified plugin version constraints
 const PluginInstallProtocolVersion = 5
 

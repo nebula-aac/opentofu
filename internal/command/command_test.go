@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -38,6 +40,7 @@ import (
 	"github.com/opentofu/opentofu/internal/configs/configschema"
 	"github.com/opentofu/opentofu/internal/copy"
 	"github.com/opentofu/opentofu/internal/depsfile"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/getproviders"
 	"github.com/opentofu/opentofu/internal/initwd"
 	legacy "github.com/opentofu/opentofu/internal/legacy/tofu"
@@ -159,12 +162,12 @@ func testModuleWithSnapshot(t *testing.T, name string) (*configs.Config, *config
 	// sources only this ultimately just records all of the module paths
 	// in a JSON file so that we can load them below.
 	inst := initwd.NewModuleInstaller(loader.ModulesDir(), loader, registry.NewClient(nil, nil))
-	_, instDiags := inst.InstallModules(context.Background(), dir, "tests", true, false, initwd.ModuleInstallHooksImpl{})
+	_, instDiags := inst.InstallModules(context.Background(), dir, "tests", true, false, initwd.ModuleInstallHooksImpl{}, configs.RootModuleCallForTesting())
 	if instDiags.HasErrors() {
 		t.Fatal(instDiags.Err())
 	}
 
-	config, snap, diags := loader.LoadConfigWithSnapshot(dir)
+	config, snap, diags := loader.LoadConfigWithSnapshot(dir, configs.RootModuleCallForTesting())
 	if diags.HasErrors() {
 		t.Fatal(diags.Error())
 	}
@@ -226,7 +229,7 @@ func testPlanFileMatchState(t *testing.T, configSnap *configload.Snapshot, state
 		StateFile:            stateFile,
 		Plan:                 plan,
 		DependencyLocks:      depsfile.NewLocks(),
-	})
+	}, encryption.PlanEncryptionDisabled())
 	if err != nil {
 		t.Fatalf("failed to create temporary plan file: %s", err)
 	}
@@ -274,11 +277,10 @@ func testFileEquals(t *testing.T, got, want string) {
 func testReadPlan(t *testing.T, path string) *plans.Plan {
 	t.Helper()
 
-	f, err := planfile.Open(path)
+	f, err := planfile.Open(path, encryption.PlanEncryptionDisabled())
 	if err != nil {
 		t.Fatalf("error opening plan file %q: %s", path, err)
 	}
-	defer f.Close()
 
 	p, err := f.ReadPlan()
 	if err != nil {
@@ -301,7 +303,7 @@ func testState() *states.State {
 				// The weird whitespace here is reflective of how this would
 				// get written out in a real state file, due to the indentation
 				// of all of the containing wrapping objects and arrays.
-				AttrsJSON:    []byte("{\n            \"id\": \"bar\"\n          }"),
+				AttrsJSON:    []byte(`{"id":"bar"}`),
 				Status:       states.ObjectReady,
 				Dependencies: []addrs.ConfigResource{},
 			},
@@ -309,6 +311,7 @@ func testState() *states.State {
 				Provider: addrs.NewDefaultProvider("test"),
 				Module:   addrs.RootModule,
 			},
+			addrs.NoKey,
 		)
 		// DeepCopy is used here to ensure our synthetic state matches exactly
 		// with a state that will have been copied during the command
@@ -325,7 +328,7 @@ func writeStateForTesting(state *states.State, w io.Writer) error {
 		Lineage: "fake-for-testing",
 		State:   state,
 	}
-	return statefile.Write(sf, w)
+	return statefile.Write(sf, w, encryption.StateEncryptionDisabled())
 }
 
 // testStateMgrCurrentLineage returns the current lineage for the given state
@@ -480,7 +483,7 @@ func testStateRead(t *testing.T, path string) *states.State {
 	}
 	defer f.Close()
 
-	sf, err := statefile.Read(f)
+	sf, err := statefile.Read(f, encryption.StateEncryptionDisabled())
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -758,7 +761,7 @@ func testBackendState(t *testing.T, s *states.State, c int) (*legacy.State, *htt
 
 	// If a state was given, make sure we calculate the proper b64md5
 	if s != nil {
-		err := statefile.Write(&statefile.File{State: s}, buf)
+		err := statefile.Write(&statefile.File{State: s}, buf, encryption.StateEncryptionDisabled())
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
@@ -771,13 +774,11 @@ func testBackendState(t *testing.T, s *states.State, c int) (*legacy.State, *htt
 	backendConfig := &configs.Backend{
 		Type:   "http",
 		Config: configs.SynthBody("<testBackendState>", map[string]cty.Value{}),
+		Eval:   configs.NewStaticEvaluator(nil, configs.RootModuleCallForTesting()),
 	}
-	b := backendInit.Backend("http")()
-
-	ctx := context.Background()
-
-	configSchema := b.ConfigSchema(ctx)
-	hash := backendConfig.Hash(configSchema)
+	b := backendInit.Backend("http")(encryption.StateEncryptionDisabled())
+	configSchema := b.ConfigSchema()
+	hash, _ := backendConfig.Hash(configSchema)
 
 	state := legacy.NewState()
 	state.Backend = &legacy.BackendState{
@@ -834,7 +835,7 @@ func testRemoteState(t *testing.T, s *states.State, c int) (*legacy.State, *http
 	retState.Backend = b
 
 	if s != nil {
-		err := statefile.Write(&statefile.File{State: s}, buf)
+		err := statefile.Write(&statefile.File{State: s}, buf, encryption.StateEncryptionDisabled())
 		if err != nil {
 			t.Fatalf("failed to write initial state: %v", err)
 		}
@@ -843,9 +844,9 @@ func testRemoteState(t *testing.T, s *states.State, c int) (*legacy.State, *http
 	return retState, srv
 }
 
-// testlockState calls a separate process to the lock the state file at path.
+// testLockState calls a separate process to the lock the state file at path.
 // deferFunc should be called in the caller to properly unlock the file.
-// Since many tests change the working directory, the sourcedir argument must be
+// Since many tests change the working directory, the sourceDir argument must be
 // supplied to locate the statelocker.go source.
 func testLockState(t *testing.T, sourceDir, path string) (func(), error) {
 	// build and run the binary ourselves so we can quickly terminate it for cleanup
@@ -1152,9 +1153,11 @@ func checkGoldenReference(t *testing.T, output *terminal.TestOutput, fixturePath
 		if _, ok := gotMap["@timestamp"]; !ok {
 			t.Errorf("missing @timestamp field in log: %s", gotLines[index])
 		}
+		gotMap = deleteMapField(gotMap, "hook", "elapsed_seconds")
 		delete(gotMap, "@timestamp")
 		gotLineMaps = append(gotLineMaps, gotMap)
 	}
+
 	var wantLineMaps []map[string]interface{}
 	for i, line := range wantLines[1:] {
 		index := i + 1
@@ -1162,11 +1165,23 @@ func checkGoldenReference(t *testing.T, output *terminal.TestOutput, fixturePath
 		if err := json.Unmarshal([]byte(line), &wantMap); err != nil {
 			t.Errorf("failed to unmarshal want line %d: %s\n%s", index, err, gotLines[index])
 		}
+		wantMap = deleteMapField(wantMap, "hook", "elapsed_seconds")
 		wantLineMaps = append(wantLineMaps, wantMap)
 	}
+
 	if diff := cmp.Diff(wantLineMaps, gotLineMaps); diff != "" {
 		t.Errorf("wrong output lines\n%s\n"+
 			"NOTE: This failure may indicate a UI change affecting the behavior of structured run output on TFC.\n"+
 			"Please communicate with Terraform Cloud team before resolving", diff)
 	}
+}
+
+func deleteMapField(fieldMap map[string]interface{}, rootField, field string) map[string]interface{} {
+	rootMap, ok := fieldMap[rootField].(map[string]interface{})
+	if !ok {
+		return fieldMap
+	}
+
+	delete(rootMap, field)
+	return rootMap
 }
