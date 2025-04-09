@@ -21,30 +21,32 @@ following sections.
 
 A module intended to be called by one or more other modules must not contain
 any `provider` blocks. A module containing its own provider configurations is
-not compatible with the `for_each`, `count`, and `depends_on` arguments.
+not compatible with the `for_each`, `count`, and `depends_on` meta-arguments.
 
 Provider configurations are used for all operations on associated resources,
 including destroying remote objects and refreshing state. OpenTofu retains, as
 part of its state, a reference to the provider configuration that was most
 recently used to apply changes to each resource. When a `resource` block is
-removed from the configuration, this record in the state will be used to locate
-the appropriate configuration because the resource's `provider` argument
-(if any) will no longer be present in the configuration.
+removed from the configuration, or a dynamic instance of a resource is removed
+by modifying the value assigned to the `count` or `for_each` meta-argument,
+this record in the state will be used to locate the appropriate configuration
+because the resource instance's `provider` argument (if any) will no longer be
+present in the configuration.
 
 As a consequence, you must ensure that all resources that belong to a
-particular provider configuration are destroyed before you can remove that
-provider configuration's block from your configuration. If OpenTofu finds
-a resource instance tracked in the state whose provider configuration block is
-no longer available then it will return an error during planning, prompting you
-to reintroduce the provider configuration.
+particular provider instance are destroyed before you can remove that
+provider instance from your configuration. If OpenTofu finds a resource instance
+tracked in the state whose provider instance is no longer declared in the
+configuration then it will return an error during planning, prompting you
+to reintroduce the provider instance.
 
 ## Provider Version Constraints in Modules
 
 Although provider _configurations_ are shared between modules, each module must
-declare its own [provider requirements](/docs/language/providers/requirements), so that
+declare its own [provider requirements](../../../language/providers/requirements.mdx), so that
 OpenTofu can ensure that there is a single version of the provider that is
 compatible with all modules in the configuration and to specify the
-[source address](/docs/language/providers/requirements#source-addresses) that serves as
+[source address](../../../language/providers/requirements.mdx#source-addresses) that serves as
 the global (module-agnostic) identifier for a provider.
 
 To declare that a module requires particular versions of a specific provider,
@@ -67,7 +69,7 @@ however, specify any of the configuration settings that determine what remote
 endpoints the provider will access, such as an AWS region; configuration
 settings come from provider _configurations_, and a particular overall OpenTofu
 configuration can potentially have
-[several different configurations for the same provider](/docs/language/providers/configuration#alias-multiple-provider-configurations).
+[several different configurations for the same provider](../../../language/providers/configuration.mdx#alias-multiple-provider-configurations).
 
 ## Provider Aliases Within Modules
 
@@ -96,10 +98,15 @@ minimum version containing the features your module relies on, and thus allow a
 user of your module to potentially select a newer provider version if other
 features are needed by other parts of their overall configuration.
 
+It is not currently possible to pass a provider configuration with multiple
+instances (that was declared using `for_each`) as a whole to a child module,
+although it is valid for the parent module to assign a single dynamic instance
+of a provider configuration to each instance of the module.
+
 ## Implicit Provider Inheritance
 
 For convenience in simple configurations, a child module automatically inherits
-[default provider configurations](/docs/language/providers/configuration#default-provider-configurations) from its parent. This means that
+[default provider configurations](../../../language/providers/configuration.mdx#default-provider-configurations) from its parent. This means that
 explicit `provider` blocks appear only in the root module, and downstream
 modules can simply declare resources for that provider and have them
 automatically associated with the root provider configurations.
@@ -130,11 +137,11 @@ We recommend using this approach when a single configuration for each provider
 is sufficient for an entire configuration.
 
 :::warning Note
-Only provider configurations are inherited by child modules, not provider source or version requirements. Each module must [declare its own provider requirements](/docs/language/providers/requirements). This is especially important for non-HashiCorp providers.
+Only provider configurations are inherited by child modules, not provider source or version requirements. Each module must [declare its own provider requirements](../../../language/providers/requirements.mdx). This is especially important for non-HashiCorp providers.
 :::
 
 In more complex situations there may be
-[multiple provider configurations](/docs/language/providers/configuration#alias-multiple-provider-configurations),
+[multiple provider configurations](../../../language/providers/configuration.mdx#alias-multiple-provider-configurations),
 or a child module may need to use different provider settings than
 its parent. For such situations, you must pass providers explicitly.
 
@@ -170,9 +177,10 @@ module "example" {
 }
 ```
 
-The `providers` argument within a `module` block is similar to
-[the `provider` argument](/docs/language/meta-arguments/resource-provider)
-within a resource, but is a map rather than a single string because a module may
+[The `providers` argument within a `module` block](../../../language/meta-arguments/module-providers.mdx)
+is similar to
+[the `provider` argument within a `resource` block](../../../language/meta-arguments/resource-provider.mdx),
+but is a mapping rather than a single string because a module may
 contain resources from many different providers.
 
 The keys of the `providers` map are provider configuration names as expected by

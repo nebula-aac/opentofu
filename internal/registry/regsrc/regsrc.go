@@ -1,8 +1,10 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 // Package regsrc provides helpers for working with source strings that identify
-// resources within a Terraform registry.
+// resources within a OpenTofu registry.
 package regsrc
 
 var (

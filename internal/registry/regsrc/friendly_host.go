@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package regsrc
@@ -29,7 +31,7 @@ var (
 	// valid Unicode points in IDN RFC (some with conditions). We are just going
 	// with being liberal with matching and then erroring if we fail to convert
 	// to punycode later (which validates chars fully). This at least ensures
-	// ascii chars dissalowed by the RC1123 parts above don't become legal
+	// ascii chars disallowed by the RC1123 parts above don't become legal
 	// again.
 	urlLabelUnicodeSubRe = "[^[:ascii:]]"
 

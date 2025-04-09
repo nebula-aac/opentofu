@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -44,6 +46,9 @@ type PlanGraphBuilder struct {
 	// Targets are resources to target
 	Targets []addrs.Targetable
 
+	// Excludes are resources to exclude
+	Excludes []addrs.Targetable
+
 	// ForceReplace are resource instances where if we would normally have
 	// generated a NoOp or Update action then we'll force generating a replace
 	// action instead. Create and Delete actions are not affected.
@@ -81,11 +86,17 @@ type PlanGraphBuilder struct {
 	// ImportTargets are the list of resources to import.
 	ImportTargets []*ImportTarget
 
+	// EndpointsToRemove are the list of resources and modules to forget from
+	// the state.
+	EndpointsToRemove []addrs.ConfigRemovable
+
 	// GenerateConfig tells OpenTofu where to write and generated config for
 	// any import targets that do not already have configuration.
 	//
 	// If empty, then config will not be generated.
 	GenerateConfigPath string
+
+	ProviderFunctionTracker ProviderFunctionMapping
 }
 
 // See GraphBuilder
@@ -128,8 +139,8 @@ func (b *PlanGraphBuilder) Steps() []GraphTransformer {
 		},
 
 		// Add dynamic values
-		&RootVariableTransformer{Config: b.Config, RawValues: b.RootVariableValues, Planning: true},
-		&ModuleVariableTransformer{Config: b.Config, Planning: true},
+		&RootVariableTransformer{Config: b.Config, RawValues: b.RootVariableValues},
+		&ModuleVariableTransformer{Config: b.Config},
 		&LocalTransformer{Config: b.Config},
 		&OutputTransformer{
 			Config:      b.Config,
@@ -193,6 +204,12 @@ func (b *PlanGraphBuilder) Steps() []GraphTransformer {
 		// analyze the configuration to find references.
 		&AttachSchemaTransformer{Plugins: b.Plugins, Config: b.Config},
 
+		// After schema transformer, we can add function references
+		&ProviderFunctionTransformer{Config: b.Config, ProviderFunctionTracker: b.ProviderFunctionTracker},
+
+		// Remove unused providers and proxies
+		&PruneProviderTransformer{},
+
 		// Create expansion nodes for all of the module calls. This must
 		// come after all other transformers that create nodes representing
 		// objects that can belong to modules.
@@ -212,7 +229,7 @@ func (b *PlanGraphBuilder) Steps() []GraphTransformer {
 		&attachDataResourceDependsOnTransformer{},
 
 		// DestroyEdgeTransformer is only required during a plan so that the
-		// TargetsTransformer can determine which nodes to keep in the graph.
+		// TargetingTransformer can determine which nodes to keep in the graph.
 		&DestroyEdgeTransformer{
 			Operation: b.Operation,
 		},
@@ -222,7 +239,7 @@ func (b *PlanGraphBuilder) Steps() []GraphTransformer {
 		},
 
 		// Target
-		&TargetsTransformer{Targets: b.Targets},
+		&TargetingTransformer{Targets: b.Targets, Excludes: b.Excludes},
 
 		// Detect when create_before_destroy must be forced on for a particular
 		// node due to dependency edges, to avoid graph cycles during apply.
@@ -232,7 +249,9 @@ func (b *PlanGraphBuilder) Steps() []GraphTransformer {
 		&CloseProviderTransformer{},
 
 		// Close the root module
-		&CloseRootModuleTransformer{},
+		&CloseRootModuleTransformer{
+			RootConfig: b.Config,
+		},
 
 		// Perform the transitive reduction to make our graph a bit
 		// more understandable if possible (it usually is possible).
@@ -264,6 +283,7 @@ func (b *PlanGraphBuilder) initPlan() {
 			NodeAbstractResourceInstance: a,
 			skipRefresh:                  b.skipRefresh,
 			skipPlanChanges:              b.skipPlanChanges,
+			EndpointsToRemove:            b.EndpointsToRemove,
 		}
 	}
 
@@ -272,8 +292,9 @@ func (b *PlanGraphBuilder) initPlan() {
 			NodeAbstractResourceInstance: a,
 			DeposedKey:                   key,
 
-			skipRefresh:     b.skipRefresh,
-			skipPlanChanges: b.skipPlanChanges,
+			skipRefresh:       b.skipRefresh,
+			skipPlanChanges:   b.skipPlanChanges,
+			EndpointsToRemove: b.EndpointsToRemove,
 		}
 	}
 }
@@ -331,13 +352,6 @@ func (b *PlanGraphBuilder) initImport() {
 			// as the new state, and users are not expecting the import process
 			// to update any other instances in state.
 			skipRefresh: true,
-
-			// If we get here, we know that we are in legacy import mode, and
-			// that the user has run the import command rather than plan.
-			// This flag must be propagated down to the
-			// NodePlannableResourceInstance so we can ignore the new import
-			// behaviour.
-			legacyImportMode: true,
 		}
 	}
 }

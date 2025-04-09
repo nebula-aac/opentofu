@@ -1,3 +1,8 @@
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package testing
 
 import (
@@ -23,6 +28,18 @@ var (
 				Attributes: map[string]*configschema.Attribute{
 					"data_prefix":     {Type: cty.String, Optional: true},
 					"resource_prefix": {Type: cty.String, Optional: true},
+					"username":        {Type: cty.String, Optional: true},
+					"password":        {Type: cty.String, Optional: true},
+				},
+				BlockTypes: map[string]*configschema.NestedBlock{
+					"block_single": {
+						Block: configschema.Block{
+							Attributes: map[string]*configschema.Attribute{
+								"string_attr": {Type: cty.String, Optional: true},
+							},
+						},
+						Nesting: configschema.NestingSingle,
+					},
 				},
 			},
 		},
@@ -227,7 +244,7 @@ func (provider *TestProvider) ApplyResourceChange(request providers.ApplyResourc
 		}
 
 		// Wait for a second to make sure the interrupts are processed by
-		// Terraform before the provider finishes. This is an attempt to ensure
+		// OpenTofu before the provider finishes. This is an attempt to ensure
 		// the output of any tests that rely on this behaviour is deterministic.
 		time.Sleep(time.Second)
 	}

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package checks
@@ -12,8 +14,8 @@ import (
 	"github.com/opentofu/opentofu/internal/configs"
 )
 
-// State is a container for state tracking of all of the the checks declared in
-// a particular Terraform configuration and their current statuses.
+// State is a container for state tracking of all of the checks declared in
+// a particular OpenTofu configuration and their current statuses.
 //
 // A State object is mutable during plan and apply operations but should
 // otherwise be treated as a read-only snapshot of the status of checks
@@ -33,8 +35,7 @@ import (
 // This container type is concurrency-safe for both reads and writes through
 // its various methods.
 type State struct {
-	mu sync.Mutex
-
+	mu          sync.Mutex
 	statuses    addrs.Map[addrs.ConfigCheckable, *configCheckableState]
 	failureMsgs addrs.Map[addrs.CheckRule, string]
 }
@@ -88,7 +89,7 @@ func NewState(config *configs.Config) *State {
 }
 
 // ConfigHasChecks returns true if and only if the given address refers to
-// a configuration object that this State object is expecting to recieve
+// a configuration object that this State object is expecting to receive
 // statuses for.
 //
 // Other methods of Checks will typically panic if given a config address

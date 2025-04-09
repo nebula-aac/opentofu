@@ -1,10 +1,17 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package addrs
 
 import (
 	"strings"
+
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
+
+	"github.com/opentofu/opentofu/internal/tfdiags"
 )
 
 // Module is an address for a module call within configuration. This is
@@ -137,9 +144,9 @@ func (m Module) Parent() Module {
 // on the root module address.
 //
 // In practice, this just turns the last element of the receiver into a
-// ModuleCall and then returns a slice of the receiever that excludes that
+// ModuleCall and then returns a slice of the receiver that excludes that
 // last part. This is just a convenience for situations where a call address
-// is required, such as when dealing with *Reference and Referencable values.
+// is required, such as when dealing with *Reference and Referenceable values.
 func (m Module) Call() (Module, ModuleCall) {
 	if len(m) == 0 {
 		panic("cannot produce ModuleCall for root module")
@@ -167,4 +174,161 @@ func (m Module) Ancestors() []Module {
 
 func (m Module) configMoveableSigil() {
 	// ModuleInstance is moveable
+}
+func (m Module) configRemovableSigil() {
+	// Empty function so Module will fulfill the requirements of the removable interface
+}
+
+// ParseModule parses a module address from the given traversal,
+// which has to contain only the module address with no resource/data/variable/etc.
+// This function only supports module addresses without instance keys (as the
+// returned Module struct doesn't support instance keys) and will return an
+// error if it encounters one.
+func ParseModule(traversal hcl.Traversal) (Module, tfdiags.Diagnostics) {
+	mod, remain, diags := parseModulePrefix(traversal)
+	if !diags.HasErrors() && len(remain) != 0 {
+		diags = diags.Append(&hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Module address expected",
+			Detail:   "It's not allowed to reference anything other than module here.",
+			Subject:  remain[0].SourceRange().Ptr(),
+		})
+	}
+
+	return mod, diags
+}
+
+// ParseModuleStr is a helper wrapper around [ParseModule] that first tries
+// to parse the given string as HCL traversal syntax.
+func ParseModuleStr(str string) (Module, tfdiags.Diagnostics) {
+	var diags tfdiags.Diagnostics
+
+	traversal, parseDiags := hclsyntax.ParseTraversalAbs([]byte(str), "", hcl.Pos{Line: 1, Column: 1})
+	diags = diags.Append(parseDiags)
+	if parseDiags.HasErrors() {
+		return nil, diags
+	}
+
+	addr, addrDiags := ParseModule(traversal)
+	diags = diags.Append(addrDiags)
+	return addr, diags
+}
+
+// parseModulePrefix parses a module address from the given traversal,
+// returning the module address and the remaining traversal.
+// For example, if the input traversal is ["module","a","module","b",
+// "null_resource", example_resource"], the output module will be ["a", "b"]
+// and the output remaining traversal will be ["null_resource",
+// "example_resource"].
+// This function only supports module addresses without instance keys (as the
+// returned Module struct doesn't support instance keys) and will return an
+// error if it encounters one.
+func parseModulePrefix(traversal hcl.Traversal) (Module, hcl.Traversal, tfdiags.Diagnostics) {
+	remain := traversal
+	var module Module
+	var diags tfdiags.Diagnostics
+
+	for len(remain) > 0 {
+		moduleName, isModule, moduleNameDiags := getModuleName(remain)
+		diags = diags.Append(moduleNameDiags)
+
+		if !isModule || diags.HasErrors() {
+			break
+		}
+
+		// Because this is a valid module address, we can safely assume that
+		// the first two elements are "module" and the module name
+		remain = remain[2:]
+
+		if len(remain) > 0 {
+			// We don't allow module instances as part of the module address
+			if _, ok := remain[0].(hcl.TraverseIndex); ok {
+				diags = diags.Append(&hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Module instance address with keys is not allowed",
+					Detail:   "Module address cannot be a module instance (e.g. \"module.a[0]\"), it must be a module instead (e.g. \"module.a\").",
+					Subject:  remain[0].SourceRange().Ptr(),
+				})
+
+				return module, remain, diags
+			}
+		}
+
+		module = append(module, moduleName)
+	}
+
+	var retRemain hcl.Traversal
+	if len(remain) > 0 {
+		retRemain = make(hcl.Traversal, len(remain))
+		copy(retRemain, remain)
+		// The first element here might be either a TraverseRoot or a
+		// TraverseAttr, depending on whether we had a module address on the
+		// front. To make life easier for callers, we'll normalize to always
+		// start with a TraverseRoot.
+		if tt, ok := retRemain[0].(hcl.TraverseAttr); ok {
+			retRemain[0] = hcl.TraverseRoot{
+				Name:     tt.Name,
+				SrcRange: tt.SrcRange,
+			}
+		}
+	}
+
+	return module, retRemain, diags
+}
+
+func getModuleName(remain hcl.Traversal) (moduleName string, isModule bool, diags tfdiags.Diagnostics) {
+	if len(remain) == 0 {
+		// If the address is empty, then we can't possibly have a module address
+		return moduleName, false, diags
+	}
+
+	var next string
+	switch tt := remain[0].(type) {
+	case hcl.TraverseRoot:
+		next = tt.Name
+	case hcl.TraverseAttr:
+		next = tt.Name
+	default:
+		diags = diags.Append(&hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Invalid address operator",
+			Detail:   "Module address prefix must be followed by dot and then a name.",
+			Subject:  remain[0].SourceRange().Ptr(),
+		})
+
+		return moduleName, false, diags
+	}
+
+	if next != "module" {
+		return moduleName, false, diags
+	}
+
+	kwRange := remain[0].SourceRange()
+	remain = remain[1:]
+	// If we have the prefix "module" then we should be followed by a
+	// module call name, as an attribute
+	if len(remain) == 0 {
+		diags = diags.Append(&hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Invalid address operator",
+			Detail:   "Prefix \"module.\" must be followed by a module name.",
+			Subject:  &kwRange,
+		})
+
+		return moduleName, false, diags
+	}
+
+	switch tt := remain[0].(type) {
+	case hcl.TraverseAttr:
+		moduleName = tt.Name
+	default:
+		diags = diags.Append(&hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Invalid address operator",
+			Detail:   "Prefix \"module.\" must be followed by a module name.",
+			Subject:  remain[0].SourceRange().Ptr(),
+		})
+		return moduleName, false, diags
+	}
+	return moduleName, true, diags
 }

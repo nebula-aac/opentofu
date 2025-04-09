@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package jsonplan
@@ -44,7 +46,7 @@ type Resource struct {
 	SensitiveValues json.RawMessage `json:"sensitive_values,omitempty"`
 }
 
-// ResourceChange is a description of an individual change action that Terraform
+// ResourceChange is a description of an individual change action that OpenTofu
 // plans to use to move from the prior state to a new state matching the
 // configuration.
 type ResourceChange struct {

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -9,7 +11,7 @@ import (
 	"github.com/opentofu/opentofu/internal/dag"
 )
 
-// testGraphnotContains is an assertion helper that tests that a node is
+// testGraphNotContains is an assertion helper that tests that a node is
 // NOT contained in the graph.
 func testGraphNotContains(t *testing.T, g *Graph, name string) {
 	for _, v := range g.Vertices() {

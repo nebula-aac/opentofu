@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package schema
@@ -410,7 +412,7 @@ func TestConfigFieldReader_ComputedSet(t *testing.T) {
 			[]string{"strSet"},
 			FieldReadResult{
 				Value: map[string]interface{}{
-					"2356372769": "foo",
+					"1938594527": "foo",
 				},
 				Exists:   true,
 				Computed: false,

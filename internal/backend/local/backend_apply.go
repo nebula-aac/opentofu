@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package local
@@ -8,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/opentofu/opentofu/internal/addrs"
@@ -25,6 +29,22 @@ import (
 // test hook called between plan+apply during opApply
 var testHookStopPlanApply func()
 
+const (
+	defaultPersistInterval                 = 20 // arbitrary interval that's hopefully a sweet spot
+	persistIntervalEnvironmentVariableName = "TF_STATE_PERSIST_INTERVAL"
+)
+
+func getEnvAsInt(envName string, defaultValue int) int {
+	if val, exists := os.LookupEnv(envName); exists {
+		parsedVal, err := strconv.Atoi(val)
+		if err == nil {
+			return parsedVal
+		}
+		panic(fmt.Sprintf("Can't parse value '%s' of environment variable '%s'", val, envName))
+	}
+	return defaultValue
+}
+
 func (b *Local) opApply(
 	stopCtx context.Context,
 	cancelCtx context.Context,
@@ -33,6 +53,15 @@ func (b *Local) opApply(
 	log.Printf("[INFO] backend/local: starting Apply operation")
 
 	var diags, moreDiags tfdiags.Diagnostics
+
+	// For the moment we have a bit of a tangled mess of context.Context here, for
+	// historical reasons. Hopefully we'll clean this up one day, but here's the
+	// guide for now:
+	// - ctx is used only for its values, and should be connected to the top-level ctx
+	//   from "package main" so that we can obtain telemetry objects, etc from it.
+	// - stopCtx is cancelled to trigger a graceful shutdown.
+	// - cancelCtx is cancelled for a graceless shutdown.
+	ctx := context.WithoutCancel(stopCtx)
 
 	// If we have a nil module at this point, then set it to an empty tree
 	// to avoid any potential crashes.
@@ -52,7 +81,7 @@ func (b *Local) opApply(
 	op.Hooks = append(op.Hooks, stateHook)
 
 	// Get our context
-	lr, _, opState, contextDiags := b.localRun(op)
+	lr, _, opState, contextDiags := b.localRun(ctx, op)
 	diags = diags.Append(contextDiags)
 	if contextDiags.HasErrors() {
 		op.ReportResult(runningOp, diags)
@@ -82,14 +111,19 @@ func (b *Local) opApply(
 	// stateHook uses schemas for when it periodically persists state to the
 	// persistent storage backend.
 	stateHook.Schemas = schemas
-	stateHook.PersistInterval = 20 * time.Second // arbitrary interval that's hopefully a sweet spot
+	persistInterval := getEnvAsInt(persistIntervalEnvironmentVariableName, defaultPersistInterval)
+	if persistInterval < defaultPersistInterval {
+		panic(fmt.Sprintf("Can't use value lower than %d for env variable %s, got %d",
+			defaultPersistInterval, persistIntervalEnvironmentVariableName, persistInterval))
+	}
+	stateHook.PersistInterval = time.Duration(persistInterval) * time.Second
 
 	var plan *plans.Plan
 	// If we weren't given a plan, then we refresh/plan
 	if op.PlanFile == nil {
 		// Perform the plan
 		log.Printf("[INFO] backend/local: apply calling Plan")
-		plan, moreDiags = lr.Core.Plan(lr.Config, lr.InputState, lr.PlanOpts)
+		plan, moreDiags = lr.Core.Plan(ctx, lr.Config, lr.InputState, lr.PlanOpts)
 		diags = diags.Append(moreDiags)
 		if moreDiags.HasErrors() {
 			// If OpenTofu Core generated a partial plan despite the errors
@@ -231,11 +265,12 @@ func (b *Local) opApply(
 	var applyState *states.State
 	var applyDiags tfdiags.Diagnostics
 	doneCh := make(chan struct{})
+	panicHandler := logging.PanicHandlerWithTraceFn()
 	go func() {
-		defer logging.PanicHandler()
+		defer panicHandler()
 		defer close(doneCh)
 		log.Printf("[INFO] backend/local: apply calling Apply")
-		applyState, applyDiags = lr.Core.Apply(plan, lr.Config)
+		applyState, applyDiags = lr.Core.Apply(ctx, plan, lr.Config)
 	}()
 
 	if b.opWait(doneCh, stopCtx, cancelCtx, lr.Core, opState, op.View) {
@@ -293,7 +328,7 @@ func (b *Local) backupStateForError(stateFile *statefile.File, err error, view v
 		fmt.Sprintf("Error saving state: %s", err),
 	))
 
-	local := statemgr.NewFilesystem("errored.tfstate")
+	local := statemgr.NewFilesystem("errored.tfstate", b.encryption)
 	writeErr := local.WriteStateForMigration(stateFile, true)
 	if writeErr != nil {
 		diags = diags.Append(tfdiags.Sourceless(
@@ -307,7 +342,7 @@ func (b *Local) backupStateForError(stateFile *statefile.File, err error, view v
 		// UX, so we should definitely avoid doing this if at all possible,
 		// but at least the user has _some_ path to recover if we end up
 		// here for some reason.
-		if dumpErr := view.EmergencyDumpState(stateFile); dumpErr != nil {
+		if dumpErr := view.EmergencyDumpState(stateFile, b.encryption); dumpErr != nil {
 			diags = diags.Append(tfdiags.Sourceless(
 				tfdiags.Error,
 				"Failed to serialize state",

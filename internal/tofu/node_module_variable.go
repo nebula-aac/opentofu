@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -25,10 +27,6 @@ type nodeExpandModuleVariable struct {
 	Module addrs.Module
 	Config *configs.Variable
 	Expr   hcl.Expression
-
-	// Planning must be set to true when building a planning graph, and must be
-	// false when building an apply graph.
-	Planning bool
 }
 
 var (
@@ -49,24 +47,9 @@ func (n *nodeExpandModuleVariable) temporaryValue() bool {
 func (n *nodeExpandModuleVariable) DynamicExpand(ctx EvalContext) (*Graph, error) {
 	var g Graph
 
-	// If this variable has preconditions, we need to report these checks now.
-	//
-	// We should only do this during planning as the apply phase starts with
-	// all the same checkable objects that were registered during the plan.
-	var checkableAddrs addrs.Set[addrs.Checkable]
-	if n.Planning {
-		if checkState := ctx.Checks(); checkState.ConfigHasChecks(n.Addr.InModule(n.Module)) {
-			checkableAddrs = addrs.MakeSet[addrs.Checkable]()
-		}
-	}
-
 	expander := ctx.InstanceExpander()
 	for _, module := range expander.ExpandModule(n.Module) {
 		addr := n.Addr.Absolute(module)
-		if checkableAddrs != nil {
-			checkableAddrs.Add(addr)
-		}
-
 		o := &nodeModuleVariable{
 			Addr:           addr,
 			Config:         n.Config,
@@ -77,15 +60,11 @@ func (n *nodeExpandModuleVariable) DynamicExpand(ctx EvalContext) (*Graph, error
 	}
 	addRootNodeToGraph(&g)
 
-	if checkableAddrs != nil {
-		ctx.Checks().ReportCheckableObjects(n.Addr.InModule(n.Module), checkableAddrs)
-	}
-
 	return &g, nil
 }
 
 func (n *nodeExpandModuleVariable) Name() string {
-	return fmt.Sprintf("%s.%s (expand)", n.Module, n.Addr.String())
+	return fmt.Sprintf("%s.%s (expand, input)", n.Module, n.Addr.String())
 }
 
 // GraphNodeModulePath
@@ -95,7 +74,6 @@ func (n *nodeExpandModuleVariable) ModulePath() addrs.Module {
 
 // GraphNodeReferencer
 func (n *nodeExpandModuleVariable) References() []*addrs.Reference {
-
 	// If we have no value expression, we cannot depend on anything.
 	if n.Expr == nil {
 		return nil
@@ -156,7 +134,7 @@ func (n *nodeModuleVariable) temporaryValue() bool {
 }
 
 func (n *nodeModuleVariable) Name() string {
-	return n.Addr.String()
+	return n.Addr.String() + "(input)"
 }
 
 // GraphNodeModuleInstance
@@ -175,17 +153,8 @@ func (n *nodeModuleVariable) ModulePath() addrs.Module {
 func (n *nodeModuleVariable) Execute(ctx EvalContext, op walkOperation) (diags tfdiags.Diagnostics) {
 	log.Printf("[TRACE] nodeModuleVariable: evaluating %s", n.Addr)
 
-	var val cty.Value
-	var err error
-
-	switch op {
-	case walkValidate:
-		val, err = n.evalModuleVariable(ctx, true)
-		diags = diags.Append(err)
-	default:
-		val, err = n.evalModuleVariable(ctx, false)
-		diags = diags.Append(err)
-	}
+	val, err := n.evalModuleVariable(ctx, op == walkValidate)
+	diags = diags.Append(err)
 	if diags.HasErrors() {
 		return diags
 	}
@@ -194,8 +163,7 @@ func (n *nodeModuleVariable) Execute(ctx EvalContext, op walkOperation) (diags t
 	// during expression evaluation.
 	_, call := n.Addr.Module.CallInstance()
 	ctx.SetModuleCallArgument(call, n.Addr.Variable, val)
-
-	return evalVariableValidations(n.Addr, n.Config, n.Expr, ctx)
+	return diags
 }
 
 // dag.GraphNodeDotter impl.

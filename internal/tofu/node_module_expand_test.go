@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package tofu
@@ -44,7 +46,7 @@ func TestNodeCloseModuleExecute(t *testing.T) {
 		ctx := &MockEvalContext{
 			StateState: state.SyncWrapper(),
 		}
-		node := nodeCloseModule{addrs.Module{"child"}}
+		node := nodeCloseModule{Addr: addrs.Module{"child"}}
 		diags := node.Execute(ctx, walkApply)
 		if diags.HasErrors() {
 			t.Fatalf("unexpected error: %s", diags.Err())
@@ -56,7 +58,7 @@ func TestNodeCloseModuleExecute(t *testing.T) {
 		}
 
 		// the root module should do all the module cleanup
-		node = nodeCloseModule{addrs.RootModule}
+		node = nodeCloseModule{Addr: addrs.RootModule}
 		diags = node.Execute(ctx, walkApply)
 		if diags.HasErrors() {
 			t.Fatalf("unexpected error: %s", diags.Err())
@@ -75,7 +77,7 @@ func TestNodeCloseModuleExecute(t *testing.T) {
 		ctx := &MockEvalContext{
 			StateState: state.SyncWrapper(),
 		}
-		node := nodeCloseModule{addrs.Module{"child"}}
+		node := nodeCloseModule{Addr: addrs.Module{"child"}}
 
 		diags := node.Execute(ctx, walkImport)
 		if diags.HasErrors() {

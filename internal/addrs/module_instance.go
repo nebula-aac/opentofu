@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package addrs
@@ -80,66 +82,31 @@ func ParseModuleInstanceStr(str string) (ModuleInstance, tfdiags.Diagnostics) {
 	return addr, diags
 }
 
+// parseModuleInstancePrefix parses a module instance address from the given
+// traversal, returning the module instance address and the remaining
+// traversal.
+// This function supports module addresses with and without instance keys.
 func parseModuleInstancePrefix(traversal hcl.Traversal) (ModuleInstance, hcl.Traversal, tfdiags.Diagnostics) {
 	remain := traversal
 	var mi ModuleInstance
 	var diags tfdiags.Diagnostics
 
-LOOP:
 	for len(remain) > 0 {
-		var next string
-		switch tt := remain[0].(type) {
-		case hcl.TraverseRoot:
-			next = tt.Name
-		case hcl.TraverseAttr:
-			next = tt.Name
-		default:
-			diags = diags.Append(&hcl.Diagnostic{
-				Severity: hcl.DiagError,
-				Summary:  "Invalid address operator",
-				Detail:   "Module address prefix must be followed by dot and then a name.",
-				Subject:  remain[0].SourceRange().Ptr(),
-			})
-			break LOOP
-		}
+		moduleName, isModule, moduleNameDiags := getModuleName(remain)
+		diags = diags.Append(moduleNameDiags)
 
-		if next != "module" {
+		if !isModule || diags.HasErrors() {
 			break
 		}
 
-		kwRange := remain[0].SourceRange()
-		remain = remain[1:]
-		// If we have the prefix "module" then we should be followed by an
-		// module call name, as an attribute, and then optionally an index step
-		// giving the instance key.
-		if len(remain) == 0 {
-			diags = diags.Append(&hcl.Diagnostic{
-				Severity: hcl.DiagError,
-				Summary:  "Invalid address operator",
-				Detail:   "Prefix \"module.\" must be followed by a module name.",
-				Subject:  &kwRange,
-			})
-			break
-		}
-
-		var moduleName string
-		switch tt := remain[0].(type) {
-		case hcl.TraverseAttr:
-			moduleName = tt.Name
-		default:
-			diags = diags.Append(&hcl.Diagnostic{
-				Severity: hcl.DiagError,
-				Summary:  "Invalid address operator",
-				Detail:   "Prefix \"module.\" must be followed by a module name.",
-				Subject:  remain[0].SourceRange().Ptr(),
-			})
-			break LOOP
-		}
-		remain = remain[1:]
+		// Because this is a valid module address, we can safely assume that
+		// the first two elements are "module" and the module name
+		remain = remain[2:]
 		step := ModuleInstanceStep{
 			Name: moduleName,
 		}
 
+		// Check for optional module instance key
 		if len(remain) > 0 {
 			if idx, ok := remain[0].(hcl.TraverseIndex); ok {
 				remain = remain[1:]
@@ -349,7 +316,7 @@ func (m ModuleInstance) Ancestors() []ModuleInstance {
 // other value.
 func (m ModuleInstance) IsAncestor(o ModuleInstance) bool {
 	// Longer or equal sized paths means the receiver cannot
-	// be an ancestor of the given module insatnce.
+	// be an ancestor of the given module instance.
 	if len(m) >= len(o) {
 		return false
 	}
@@ -377,9 +344,9 @@ func (m ModuleInstance) IsAncestor(o ModuleInstance) bool {
 // of the instance. To retain this, use CallInstance instead.
 //
 // In practice, this just turns the last element of the receiver into a
-// ModuleCall and then returns a slice of the receiever that excludes that
+// ModuleCall and then returns a slice of the receiver that excludes that
 // last part. This is just a convenience for situations where a call address
-// is required, such as when dealing with *Reference and Referencable values.
+// is required, such as when dealing with *Reference and Referenceable values.
 func (m ModuleInstance) Call() (ModuleInstance, ModuleCall) {
 	if len(m) == 0 {
 		panic("cannot produce ModuleCall for root module")
@@ -399,9 +366,9 @@ func (m ModuleInstance) Call() (ModuleInstance, ModuleCall) {
 // on the root module address.
 //
 // In practice, this just turns the last element of the receiver into a
-// ModuleCallInstance and then returns a slice of the receiever that excludes
+// ModuleCallInstance and then returns a slice of the receiver that excludes
 // that last part. This is just a convenience for situations where a call\
-// address is required, such as when dealing with *Reference and Referencable
+// address is required, such as when dealing with *Reference and Referenceable
 // values.
 func (m ModuleInstance) CallInstance() (ModuleInstance, ModuleCallInstance) {
 	if len(m) == 0 {
@@ -420,7 +387,7 @@ func (m ModuleInstance) CallInstance() (ModuleInstance, ModuleCallInstance) {
 // TargetContains implements Targetable by returning true if the given other
 // address either matches the receiver, is a sub-module-instance of the
 // receiver, or is a targetable absolute address within a module that
-// is contained within the reciever.
+// is contained within the receiver.
 func (m ModuleInstance) TargetContains(other Targetable) bool {
 	switch to := other.(type) {
 	case Module:
@@ -502,6 +469,42 @@ func (m ModuleInstance) Module() Module {
 		ret[i] = step.Name
 	}
 	return ret
+}
+
+// HasSameModule returns true if calling [ModuleInstance.Module] on both
+// the receiver and the other given address would produce equal [Module]
+// addresses.
+//
+// This is here only as an optimization to avoid the overhead of constructing
+// two [Module] values just to compare them and then throw them away.
+func (m ModuleInstance) HasSameModule(other ModuleInstance) bool {
+	if len(m) != len(other) {
+		return false
+	}
+	for i := range m {
+		if m[i].Name != other[i].Name {
+			return false
+		}
+	}
+	return true
+}
+
+// HasSameModule returns true if calling [ModuleInstance.Module] on the
+// receiver would return a [Module] address equal to the one given as
+// an argument.
+//
+// This is here only as an optimization to avoid the overhead of constructing
+// a [Module] value from the reciever just to compare it and then throw it away.
+func (m ModuleInstance) IsForModule(module Module) bool {
+	if len(m) != len(module) {
+		return false
+	}
+	for i := range m {
+		if m[i].Name != module[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (m ModuleInstance) AddrType() TargetableAddrType {

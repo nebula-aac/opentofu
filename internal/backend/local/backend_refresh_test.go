@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package local
@@ -298,6 +300,7 @@ func testRefreshState() *states.State {
 			AttrsJSON: []byte(`{"id":"bar"}`),
 		},
 		mustProviderConfig(`provider["registry.opentofu.org/hashicorp/test"]`),
+		addrs.NoKey,
 	)
 	return state
 }

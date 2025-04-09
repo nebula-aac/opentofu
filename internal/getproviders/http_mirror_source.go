@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package getproviders
@@ -252,7 +254,7 @@ func (s *HTTPMirrorSource) ForDisplay(provider addrs.Provider) string {
 //
 // If the returned error is non-nil then the given hostname doesn't comply
 // with the IETF RFC 5891 section 5.3 and 5.4 validation rules, and thus cannot
-// be interpreted as a valid Terraform service host. The IDNA validation errors
+// be interpreted as a valid OpenTofu service host. The IDNA validation errors
 // are unfortunately usually not very user-friendly, but they are also
 // relatively rare because the IDNA normalization rules are quite tolerant.
 func (s *HTTPMirrorSource) mirrorHost() (svchost.Hostname, error) {
@@ -311,7 +313,7 @@ func (s *HTTPMirrorSource) get(ctx context.Context, relativePath string) (status
 		// then the credentials will still be included in the new request,
 		// even if they are on a different hostname. This is intentional
 		// and consistent with how we handle credentials for other
-		// Terraform-native services, because the user model is to configure
+		// OpenTofu-native services, because the user model is to configure
 		// credentials for the "friendly hostname" they configured, not for
 		// whatever hostname ends up ultimately serving the request as an
 		// implementation detail.
@@ -397,7 +399,7 @@ func (s *HTTPMirrorSource) errUnauthorized(finalURL *url.URL) error {
 func svchostFromURL(u *url.URL) (svchost.Hostname, error) {
 	raw := u.Host
 
-	// When "friendly hostnames" appear in Terraform-specific identifiers we
+	// When "friendly hostnames" appear in OpenTofu-specific identifiers we
 	// typically constrain their syntax more strictly than the
 	// Internationalized Domain Name specifications call for, such as
 	// forbidding direct use of punycode, but in this case we're just
@@ -413,7 +415,7 @@ func svchostFromURL(u *url.URL) (svchost.Hostname, error) {
 	// a network mirror over HTTP would potentially transmit any configured
 	// credentials in cleartext. Therefore we don't need to do any special
 	// handling of default ports here, because svchost.Hostname already
-	// considers the absense of a port to represent the standard HTTPS port
+	// considers the absence of a port to represent the standard HTTPS port
 	// 443, and will normalize away an explicit specification of port 443
 	// in svchost.ForComparison below.
 

@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package initwd
@@ -39,7 +41,8 @@ func LoadConfigForTests(t *testing.T, rootDir string, testsDir string) (*configs
 	loader, cleanup := configload.NewLoaderForTests(t)
 	inst := NewModuleInstaller(loader.ModulesDir(), loader, registry.NewClient(nil, nil))
 
-	_, moreDiags := inst.InstallModules(context.Background(), rootDir, testsDir, true, false, ModuleInstallHooksImpl{})
+	call := configs.RootModuleCallForTesting()
+	_, moreDiags := inst.InstallModules(context.Background(), rootDir, testsDir, true, false, ModuleInstallHooksImpl{}, call)
 	diags = diags.Append(moreDiags)
 	if diags.HasErrors() {
 		cleanup()
@@ -53,7 +56,7 @@ func LoadConfigForTests(t *testing.T, rootDir string, testsDir string) (*configs
 		t.Fatalf("failed to refresh modules after installation: %s", err)
 	}
 
-	config, hclDiags := loader.LoadConfig(rootDir)
+	config, hclDiags := loader.LoadConfig(rootDir, call)
 	diags = diags.Append(hclDiags)
 	return config, loader, cleanup, diags
 }

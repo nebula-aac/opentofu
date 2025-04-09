@@ -1,3 +1,8 @@
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
+// SPDX-License-Identifier: MPL-2.0
+
 package tofu
 
 import (
@@ -60,7 +65,7 @@ run "test_case" {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 			}),
 			provider: &MockProvider{
 				GetProviderSchemaResponse: &providers.GetProviderSchemaResponse{
@@ -118,7 +123,7 @@ run "test_case" {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 			}),
 			provider: &MockProvider{
 				GetProviderSchemaResponse: &providers.GetProviderSchemaResponse{
@@ -178,7 +183,7 @@ run "test_case" {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 			}),
 			variables: InputValues{
 				"value": {
@@ -235,7 +240,7 @@ run "test_case" {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 			}),
 			provider: &MockProvider{
 				GetProviderSchemaResponse: &providers.GetProviderSchemaResponse{
@@ -298,7 +303,7 @@ run "test_case" {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 			}),
 			provider: &MockProvider{
 				GetProviderSchemaResponse: &providers.GetProviderSchemaResponse{
@@ -398,7 +403,7 @@ run "test_case" {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 			}),
 			plan: &plans.Plan{
 				Changes: &plans.Changes{
@@ -474,7 +479,7 @@ run "test_case" {
 					addrs.AbsProviderConfig{
 						Module:   addrs.RootModule,
 						Provider: addrs.NewDefaultProvider("test"),
-					})
+					}, addrs.NoKey)
 			}),
 			plan: &plans.Plan{
 				Changes: &plans.Changes{

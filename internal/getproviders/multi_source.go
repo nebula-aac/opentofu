@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package getproviders
@@ -197,7 +199,7 @@ func ParseMultiSourceMatchingPatterns(strs []string) (MultiSourceMatchingPattern
 // is both included by the selector's include patterns and _not_ excluded
 // by its exclude patterns.
 //
-// The absense of any include patterns is treated the same as a pattern
+// The absence of any include patterns is treated the same as a pattern
 // that matches all addresses. Exclusions take priority over inclusions.
 func (s MultiSourceSelector) CanHandleProvider(addr addrs.Provider) bool {
 	switch {

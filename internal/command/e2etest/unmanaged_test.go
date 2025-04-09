@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package e2etest
@@ -149,7 +151,7 @@ func TestUnmanagedSeparatePlan(t *testing.T) {
 	t.Parallel()
 
 	fixturePath := filepath.Join("testdata", "test-provider")
-	tf := e2e.NewBinary(t, terraformBin, fixturePath)
+	tf := e2e.NewBinary(t, tofuBin, fixturePath)
 
 	reattachCh := make(chan *plugin.ReattachConfig)
 	closeCh := make(chan struct{})
@@ -254,7 +256,7 @@ func TestUnmanagedSeparatePlan_proto5(t *testing.T) {
 	t.Parallel()
 
 	fixturePath := filepath.Join("testdata", "test-provider")
-	tf := e2e.NewBinary(t, terraformBin, fixturePath)
+	tf := e2e.NewBinary(t, tofuBin, fixturePath)
 
 	reattachCh := make(chan *plugin.ReattachConfig)
 	closeCh := make(chan struct{})

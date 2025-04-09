@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package configs
@@ -73,7 +75,7 @@ func (v *Variable) merge(ov *Variable) hcl.Diagnostics {
 	// but in particular might be user-observable in the edge case where the
 	// literal value in config could've been converted to the overridden type
 	// constraint but the converted value cannot. In practice, this situation
-	// should be rare since most of our conversions are interchangable.
+	// should be rare since most of our conversions are interchangeable.
 	if v.Default != cty.NilVal {
 		val, err := convert.Convert(v.Default, v.ConstraintType)
 		if err != nil {
@@ -167,9 +169,7 @@ func (mc *ModuleCall) merge(omc *ModuleCall) hcl.Diagnostics {
 	var diags hcl.Diagnostics
 
 	if omc.SourceSet {
-		mc.SourceAddr = omc.SourceAddr
-		mc.SourceAddrRaw = omc.SourceAddrRaw
-		mc.SourceAddrRange = omc.SourceAddrRange
+		mc.Source = omc.Source
 		mc.SourceSet = omc.SourceSet
 	}
 
@@ -181,8 +181,8 @@ func (mc *ModuleCall) merge(omc *ModuleCall) hcl.Diagnostics {
 		mc.ForEach = omc.ForEach
 	}
 
-	if len(omc.Version.Required) != 0 {
-		mc.Version = omc.Version
+	if omc.VersionAttr != nil {
+		mc.VersionAttr = omc.VersionAttr
 	}
 
 	mc.Config = MergeBodies(mc.Config, omc.Config)
@@ -230,7 +230,7 @@ func (r *Resource) merge(or *Resource, rps map[string]*RequiredProvider) hcl.Dia
 		}
 	}
 
-	// Provider FQN is set by Terraform during Merge
+	// Provider FQN is set by OpenTofu during Merge
 
 	if r.Mode == addrs.ManagedResourceMode {
 		// or.Managed is always non-nil for managed resource mode

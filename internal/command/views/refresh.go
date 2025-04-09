@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package views
@@ -66,10 +68,7 @@ func (v *RefreshHuman) Operation() Operation {
 }
 
 func (v *RefreshHuman) Hooks() []tofu.Hook {
-	return []tofu.Hook{
-		v.countHook,
-		NewUiHook(v.view),
-	}
+	return []tofu.Hook{v.countHook, NewUIOptionalHook(v.view)}
 }
 
 func (v *RefreshHuman) Diagnostics(diags tfdiags.Diagnostics) {

@@ -1,14 +1,16 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package http
 
 import (
-	"os"
 	"testing"
 	"time"
 
 	"github.com/opentofu/opentofu/internal/configs"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/zclconf/go-cty/cty"
 
 	"github.com/opentofu/opentofu/internal/backend"
@@ -24,7 +26,7 @@ func TestHTTPClientFactory(t *testing.T) {
 	conf := map[string]cty.Value{
 		"address": cty.StringVal("http://127.0.0.1:8888/foo"),
 	}
-	b := backend.TestBackendConfig(t, New(), configs.SynthBody("synth", conf)).(*Backend)
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), configs.SynthBody("synth", conf)).(*Backend)
 	client := b.client
 
 	if client == nil {
@@ -46,6 +48,10 @@ func TestHTTPClientFactory(t *testing.T) {
 		t.Fatal("Unexpected username or password")
 	}
 
+	if client.Headers != nil {
+		t.Fatal("Unexpected headers")
+	}
+
 	// custom
 	conf = map[string]cty.Value{
 		"address":        cty.StringVal("http://127.0.0.1:8888/foo"),
@@ -59,9 +65,12 @@ func TestHTTPClientFactory(t *testing.T) {
 		"retry_max":      cty.StringVal("999"),
 		"retry_wait_min": cty.StringVal("15"),
 		"retry_wait_max": cty.StringVal("150"),
+		"headers": cty.MapVal(map[string]cty.Value{
+			"user-defined": cty.StringVal("test"),
+		}),
 	}
 
-	b = backend.TestBackendConfig(t, New(), configs.SynthBody("synth", conf)).(*Backend)
+	b = backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), configs.SynthBody("synth", conf)).(*Backend)
 	client = b.client
 
 	if client == nil {
@@ -91,6 +100,29 @@ func TestHTTPClientFactory(t *testing.T) {
 	if client.Client.RetryWaitMax != 150*time.Second {
 		t.Fatalf("Expected retry_wait_max \"%s\", got \"%s\"", 150*time.Second, client.Client.RetryWaitMax)
 	}
+
+	if len(client.Headers) != 1 || client.Headers["user-defined"] != "test" {
+		t.Fatalf("Expected headers \"user-defined\" to be \"test\", got \"%s\"", client.Headers)
+	}
+
+	// authorization header
+	conf = map[string]cty.Value{
+		"address": cty.StringVal("http://127.0.0.1:8888/foo"),
+		"headers": cty.MapVal(map[string]cty.Value{
+			"authorization": cty.StringVal("auth-test"),
+		}),
+	}
+
+	b, _ = backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), configs.SynthBody("synth", conf)).(*Backend)
+	client = b.client
+
+	if client == nil {
+		t.Fatal("Unexpected failure, update_method")
+	}
+
+	if len(client.Headers) != 1 || client.Headers["authorization"] != "auth-test" {
+		t.Fatalf("Expected headers \"authorization\" to be \"auth-test\", got \"%s\"", client.Headers)
+	}
 }
 
 func TestHTTPClientFactoryWithEnv(t *testing.T) {
@@ -109,19 +141,19 @@ func TestHTTPClientFactoryWithEnv(t *testing.T) {
 		"retry_wait_max": "150",
 	}
 
-	defer testWithEnv(t, "TF_HTTP_ADDRESS", conf["address"])()
-	defer testWithEnv(t, "TF_HTTP_UPDATE_METHOD", conf["update_method"])()
-	defer testWithEnv(t, "TF_HTTP_LOCK_ADDRESS", conf["lock_address"])()
-	defer testWithEnv(t, "TF_HTTP_UNLOCK_ADDRESS", conf["unlock_address"])()
-	defer testWithEnv(t, "TF_HTTP_LOCK_METHOD", conf["lock_method"])()
-	defer testWithEnv(t, "TF_HTTP_UNLOCK_METHOD", conf["unlock_method"])()
-	defer testWithEnv(t, "TF_HTTP_USERNAME", conf["username"])()
-	defer testWithEnv(t, "TF_HTTP_PASSWORD", conf["password"])()
-	defer testWithEnv(t, "TF_HTTP_RETRY_MAX", conf["retry_max"])()
-	defer testWithEnv(t, "TF_HTTP_RETRY_WAIT_MIN", conf["retry_wait_min"])()
-	defer testWithEnv(t, "TF_HTTP_RETRY_WAIT_MAX", conf["retry_wait_max"])()
+	t.Setenv("TF_HTTP_ADDRESS", conf["address"])
+	t.Setenv("TF_HTTP_UPDATE_METHOD", conf["update_method"])
+	t.Setenv("TF_HTTP_LOCK_ADDRESS", conf["lock_address"])
+	t.Setenv("TF_HTTP_UNLOCK_ADDRESS", conf["unlock_address"])
+	t.Setenv("TF_HTTP_LOCK_METHOD", conf["lock_method"])
+	t.Setenv("TF_HTTP_UNLOCK_METHOD", conf["unlock_method"])
+	t.Setenv("TF_HTTP_USERNAME", conf["username"])
+	t.Setenv("TF_HTTP_PASSWORD", conf["password"])
+	t.Setenv("TF_HTTP_RETRY_MAX", conf["retry_max"])
+	t.Setenv("TF_HTTP_RETRY_WAIT_MIN", conf["retry_wait_min"])
+	t.Setenv("TF_HTTP_RETRY_WAIT_MAX", conf["retry_wait_max"])
 
-	b := backend.TestBackendConfig(t, New(), nil).(*Backend)
+	b := backend.TestBackendConfig(t, New(encryption.StateEncryptionDisabled()), nil).(*Backend)
 	client := b.client
 
 	if client == nil {
@@ -150,18 +182,5 @@ func TestHTTPClientFactoryWithEnv(t *testing.T) {
 	}
 	if client.Client.RetryWaitMax != 150*time.Second {
 		t.Fatalf("Expected retry_wait_max \"%s\", got \"%s\"", 150*time.Second, client.Client.RetryWaitMax)
-	}
-}
-
-// testWithEnv sets an environment variable and returns a deferable func to clean up
-func testWithEnv(t *testing.T, key string, value string) func() {
-	if err := os.Setenv(key, value); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	return func() {
-		if err := os.Unsetenv(key); err != nil {
-			t.Fatalf("err: %v", err)
-		}
 	}
 }

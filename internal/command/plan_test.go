@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package command
@@ -22,6 +24,7 @@ import (
 	backendinit "github.com/opentofu/opentofu/internal/backend/init"
 	"github.com/opentofu/opentofu/internal/checks"
 	"github.com/opentofu/opentofu/internal/configs/configschema"
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/plans"
 	"github.com/opentofu/opentofu/internal/providers"
 	"github.com/opentofu/opentofu/internal/states"
@@ -150,6 +153,7 @@ func TestPlan_destroy(t *testing.T) {
 				Provider: addrs.NewDefaultProvider("test"),
 				Module:   addrs.RootModule,
 			},
+			addrs.NoKey,
 		)
 	})
 	outPath := testTempFile(t)
@@ -214,6 +218,39 @@ func TestPlan_noState(t *testing.T) {
 	expected := cty.NullVal(p.GetProviderSchemaResponse.ResourceTypes["test_instance"].Block.ImpliedType())
 	if !expected.RawEquals(actual) {
 		t.Fatalf("wrong prior state\ngot:  %#v\nwant: %#v", actual, expected)
+	}
+}
+
+func TestPlan_noTestVars(t *testing.T) {
+	td := t.TempDir()
+	testCopyDir(t, testFixturePath("plan-no-test-vars"), td)
+	defer testChdir(t, td)()
+
+	p := planFixtureProvider()
+	view, done := testView(t)
+	c := &PlanCommand{
+		Meta: Meta{
+			testingOverrides: metaOverridesForProvider(p),
+			View:             view,
+		},
+	}
+
+	code := c.Run([]string{})
+	output := done(t)
+	if code != 0 {
+		t.Fatalf("bad: %d\n\n%s", code, output.Stderr())
+	}
+
+	// Verify values defined in the 'tests' folder are not used during a plan action
+	expectedResult := `ami = "ValueFROMmain/tfvars"`
+	result := output.All()
+	if !strings.Contains(result, expectedResult) {
+		t.Fatalf("Expected output to contain '%s', got: %s", expectedResult, result)
+	}
+
+	expectedToNotExist := "ValueFROMtests/tfvars"
+	if strings.Contains(result, expectedToNotExist) {
+		t.Fatalf("Expected output to not contain '%s', got: %s", expectedToNotExist, result)
 	}
 }
 
@@ -313,6 +350,7 @@ func TestPlan_outPathNoChange(t *testing.T) {
 				Provider: addrs.NewDefaultProvider("test"),
 				Module:   addrs.RootModule,
 			},
+			addrs.NoKey,
 		)
 	})
 	statePath := testStateFile(t, originalState)
@@ -414,6 +452,7 @@ func TestPlan_outBackend(t *testing.T) {
 				Provider: addrs.NewDefaultProvider("test"),
 				Module:   addrs.RootModule,
 			},
+			addrs.NoKey,
 		)
 	})
 
@@ -477,8 +516,8 @@ func TestPlan_outBackend(t *testing.T) {
 		t.Errorf("wrong backend workspace %q; want %q", got, want)
 	}
 	{
-		httpBackend := backendinit.Backend("http")()
-		schema := httpBackend.ConfigSchema(context.Background())
+		httpBackend := backendinit.Backend("http")(encryption.StateEncryptionDisabled())
+		schema := httpBackend.ConfigSchema()
 		got, err := plan.Backend.Config.Decode(schema.ImpliedType())
 		if err != nil {
 			t.Fatalf("failed to decode backend config in plan: %s", err)
@@ -899,6 +938,41 @@ func TestPlan_providerArgumentUnset(t *testing.T) {
 			},
 		},
 	}
+	view, done := testView(t)
+	c := &PlanCommand{
+		Meta: Meta{
+			testingOverrides: metaOverridesForProvider(p),
+			View:             view,
+		},
+	}
+
+	args := []string{}
+	code := c.Run(args)
+	output := done(t)
+	if code != 0 {
+		t.Fatalf("bad: %d\n\n%s", code, output.Stderr())
+	}
+}
+
+// based on the TestPlan_varsUnset test
+// this is to check if we use the static variable in a resource
+// does Plan ask for input
+func TestPlan_resource_variable_inputs(t *testing.T) {
+	td := t.TempDir()
+	testCopyDir(t, testFixturePath("plan-vars-unset"), td)
+	defer testChdir(t, td)()
+
+	// The plan command will prompt for interactive input of var.src.
+	// We'll answer "mod" to that prompt, which should then allow this
+	// configuration to apply even though var.src doesn't have a
+	// default value and there are no -var arguments on our command line.
+
+	// This will (helpfully) panic if more than one variable is requested during plan:
+	// https://github.com/hashicorp/terraform/issues/26027
+	inputClose := testInteractiveInput(t, []string{"./mod"})
+	defer inputClose()
+
+	p := planVarsFixtureProvider()
 	view, done := testView(t)
 	c := &PlanCommand{
 		Meta: Meta{
@@ -1363,6 +1437,92 @@ func TestPlan_targetFlagsDiags(t *testing.T) {
 	}
 }
 
+// Config with multiple resources, targeted plan with exclude
+func TestPlan_excluded(t *testing.T) {
+	td := t.TempDir()
+	testCopyDir(t, testFixturePath("apply-excluded"), td)
+	defer testChdir(t, td)()
+
+	p := testProvider()
+	p.GetProviderSchemaResponse = &providers.GetProviderSchemaResponse{
+		ResourceTypes: map[string]providers.Schema{
+			"test_instance": {
+				Block: &configschema.Block{
+					Attributes: map[string]*configschema.Attribute{
+						"id": {Type: cty.String, Computed: true},
+					},
+				},
+			},
+		},
+	}
+	p.PlanResourceChangeFn = func(req providers.PlanResourceChangeRequest) providers.PlanResourceChangeResponse {
+		return providers.PlanResourceChangeResponse{
+			PlannedState: req.ProposedNewState,
+		}
+	}
+
+	view, done := testView(t)
+	c := &PlanCommand{
+		Meta: Meta{
+			testingOverrides: metaOverridesForProvider(p),
+			View:             view,
+		},
+	}
+
+	args := []string{
+		"-exclude", "test_instance.bar",
+	}
+	code := c.Run(args)
+	output := done(t)
+	if code != 0 {
+		t.Fatalf("bad: %d\n\n%s", code, output.Stderr())
+	}
+
+	if got, want := output.Stdout(), "3 to add, 0 to change, 0 to destroy"; !strings.Contains(got, want) {
+		t.Fatalf("bad change summary, want %q, got:\n%s", want, got)
+	}
+}
+
+// Diagnostics for invalid -exclude flags
+func TestPlan_excludeFlagsDiags(t *testing.T) {
+	testCases := map[string]string{
+		"test_instance.": "Dot must be followed by attribute name.",
+		"test_instance":  "Resource specification must include a resource type and name.",
+	}
+
+	for exclude, wantDiag := range testCases {
+		t.Run(exclude, func(t *testing.T) {
+			td := testTempDir(t)
+			defer os.RemoveAll(td)
+			defer testChdir(t, td)()
+
+			view, done := testView(t)
+			c := &PlanCommand{
+				Meta: Meta{
+					View: view,
+				},
+			}
+
+			args := []string{
+				"-exclude", exclude,
+			}
+			code := c.Run(args)
+			output := done(t)
+			if code != 1 {
+				t.Fatalf("bad: %d\n\n%s", code, output.Stdout())
+			}
+
+			got := output.Stderr()
+			if !strings.Contains(got, exclude) {
+				t.Fatalf("bad error output, want %q, got:\n%s", exclude, got)
+			}
+			if !strings.Contains(got, wantDiag) {
+				t.Fatalf("bad error output, want %q, got:\n%s", wantDiag, got)
+			}
+		})
+	}
+}
+
 func TestPlan_replace(t *testing.T) {
 	td := t.TempDir()
 	testCopyDir(t, testFixturePath("plan-replace"), td)
@@ -1383,6 +1543,7 @@ func TestPlan_replace(t *testing.T) {
 				Provider: addrs.NewDefaultProvider("test"),
 				Module:   addrs.RootModule,
 			},
+			addrs.NoKey,
 		)
 	})
 	statePath := testStateFile(t, originalState)
@@ -1649,6 +1810,86 @@ func planFixtureSchema() *providers.GetProviderSchemaResponse {
 				},
 			},
 		},
+	}
+}
+
+func TestPlan_showSensitiveArg(t *testing.T) {
+	td := t.TempDir()
+	testCopyDir(t, testFixturePath("plan-sensitive-output"), td)
+	defer testChdir(t, td)()
+
+	p := planFixtureProvider()
+	view, done := testView(t)
+	c := &PlanCommand{
+		Meta: Meta{
+			testingOverrides: metaOverridesForProvider(p),
+			View:             view,
+		},
+	}
+
+	args := []string{
+		"-show-sensitive",
+	}
+	code := c.Run(args)
+	output := done(t)
+	if code != 0 {
+		t.Fatalf("bad status code: \n%s", output.Stderr())
+	}
+
+	if got, want := output.Stdout(), "sensitive    = \"Hello world\""; !strings.Contains(got, want) {
+		t.Fatalf("got incorrect output, want %q, got:\n%s", want, got)
+	}
+}
+
+func TestPlan_withoutShowSensitiveArg(t *testing.T) {
+	td := t.TempDir()
+	testCopyDir(t, testFixturePath("plan-sensitive-output"), td)
+	defer testChdir(t, td)()
+
+	p := planFixtureProvider()
+	view, done := testView(t)
+	c := &PlanCommand{
+		Meta: Meta{
+			testingOverrides: metaOverridesForProvider(p),
+			View:             view,
+		},
+	}
+
+	args := []string{}
+	code := c.Run(args)
+	output := done(t)
+	if code != 0 {
+		t.Fatalf("bad status code: \n%s", output.Stderr())
+	}
+
+	if got, want := output.Stdout(), "sensitive    = (sensitive value)"; !strings.Contains(got, want) {
+		t.Fatalf("got incorrect output, want %q, got:\n%s", want, got)
+	}
+}
+
+func TestPlan_concise(t *testing.T) {
+	td := t.TempDir()
+	testCopyDir(t, testFixturePath("plan"), td)
+	defer testChdir(t, td)()
+
+	p := planFixtureProvider()
+	view, done := testView(t)
+	c := &PlanCommand{
+		Meta: Meta{
+			testingOverrides: metaOverridesForProvider(p),
+			View:             view,
+		},
+	}
+
+	args := []string{"-concise"}
+	code := c.Run(args)
+	output := done(t)
+	if code != 0 {
+		t.Fatalf("bad status code: \n%s", output.Stderr())
+	}
+
+	if got, want := output.Stdout(), "Reading..."; strings.Contains(got, want) {
+		t.Fatalf("got incorrect output, want %q, got:\n%s", want, got)
 	}
 }
 

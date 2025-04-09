@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package funcs
@@ -53,6 +55,10 @@ var DescriptionList = map[string]descriptionEntry{
 		Description:      "`base64gzip` compresses a string with gzip and then encodes the result in Base64 encoding.",
 		ParamDescription: []string{""},
 	},
+	"base64gunzip": {
+		Description:      "`base64gunzip` decodes a Base64-encoded string and uncompresses the result with gzip.",
+		ParamDescription: []string{""},
+	},
 	"base64sha256": {
 		Description:      "`base64sha256` computes the SHA256 hash of a given string and encodes it with Base64. This is not equivalent to `base64encode(sha256(\"test\"))` since `sha256()` returns hexadecimal representation.",
 		ParamDescription: []string{""},
@@ -89,6 +95,13 @@ var DescriptionList = map[string]descriptionEntry{
 		ParamDescription: []string{
 			"",
 			"The maximum length of each chunk. All but the last element of the result is guaranteed to be of exactly this size.",
+		},
+	},
+	"cidrcontains": {
+		Description: "`cidrcontains` determines whether a given IP address or an address prefix given in CIDR notation is within a given IP network address prefix.",
+		ParamDescription: []string{
+			"`containing_prefix` must be given in CIDR notation, as defined in [RFC 4632 section 3.1](https://tools.ietf.org/html/rfc4632#section-3.1).",
+			"`contained_ip_or_prefix` is either an IP address or an address prefix given in CIDR notation.",
 		},
 	},
 	"cidrhost": {
@@ -230,6 +243,10 @@ var DescriptionList = map[string]descriptionEntry{
 	"index": {
 		Description:      "`index` finds the element index for a given value in a list.",
 		ParamDescription: []string{"", ""},
+	},
+	"issensitive": {
+		Description:      "`issensitive` takes any value and returns `true` if the value is marked as sensitive, and `false` otherwise.",
+		ParamDescription: []string{""},
 	},
 	"join": {
 		Description: "`join` produces a string by concatenating together all elements of a given list of strings with the given delimiter.",
@@ -414,6 +431,10 @@ var DescriptionList = map[string]descriptionEntry{
 		Description:      "`templatefile` reads the file at the given path and renders its content as a template using a supplied set of template variables.",
 		ParamDescription: []string{"", ""},
 	},
+	"templatestring": {
+		Description:      "`templatestring` processes the provided string as a template using a supplied set of template variables.",
+		ParamDescription: []string{"", ""},
+	},
 	"textdecodebase64": {
 		Description:      "`textdecodebase64` function decodes a string that was previously Base64-encoded, and then interprets the result as characters in a specified character encoding.",
 		ParamDescription: []string{"", ""},
@@ -503,6 +524,10 @@ var DescriptionList = map[string]descriptionEntry{
 	},
 	"urlencode": {
 		Description:      "`urlencode` applies URL encoding to a given string.",
+		ParamDescription: []string{""},
+	},
+	"urldecode": {
+		Description:      "`urldecode` applies URL decoding to a given encoded string.",
 		ParamDescription: []string{""},
 	},
 	"uuid": {

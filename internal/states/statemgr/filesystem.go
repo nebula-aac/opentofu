@@ -1,11 +1,12 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package statemgr
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 
 	multierror "github.com/hashicorp/go-multierror"
 
+	"github.com/opentofu/opentofu/internal/encryption"
 	"github.com/opentofu/opentofu/internal/states"
 	"github.com/opentofu/opentofu/internal/states/statefile"
 	"github.com/opentofu/opentofu/internal/tofu"
@@ -27,8 +29,6 @@ import (
 //
 // The transient storage for Filesystem is always in-memory.
 type Filesystem struct {
-	mu sync.Mutex
-
 	// path is the location where a file will be created or replaced for
 	// each persistent snapshot.
 	path string
@@ -57,10 +57,12 @@ type Filesystem struct {
 	// hurt to remove file we never wrote to.
 	created bool
 
-	file          *statefile.File
-	readFile      *statefile.File
-	backupFile    *statefile.File
-	writtenBackup bool
+	mu             sync.Mutex
+	file, readFile *statefile.File
+	backupFile     *statefile.File
+	writtenBackup  bool
+
+	encryption encryption.StateEncryption
 }
 
 var (
@@ -74,20 +76,22 @@ var (
 //
 // This is equivalent to calling NewFileSystemBetweenPaths with statePath as
 // both of the path arguments.
-func NewFilesystem(statePath string) *Filesystem {
+func NewFilesystem(statePath string, enc encryption.StateEncryption) *Filesystem {
 	return &Filesystem{
-		path:     statePath,
-		readPath: statePath,
+		path:       statePath,
+		readPath:   statePath,
+		encryption: enc,
 	}
 }
 
 // NewFilesystemBetweenPaths creates a filesystem-based state manager that
 // reads an initial snapshot from readPath and then writes all new snapshots to
 // writePath.
-func NewFilesystemBetweenPaths(readPath, writePath string) *Filesystem {
+func NewFilesystemBetweenPaths(readPath, writePath string, enc encryption.StateEncryption) *Filesystem {
 	return &Filesystem{
-		path:     writePath,
-		readPath: readPath,
+		path:       writePath,
+		readPath:   readPath,
+		encryption: enc,
 	}
 }
 
@@ -121,13 +125,8 @@ func (s *Filesystem) State() *states.State {
 	return s.file.DeepCopy().State
 }
 
-// WriteState is an incorrect implementation of Writer that actually also
-// persists.
+// WriteState is an implementation of Writer.
 func (s *Filesystem) WriteState(state *states.State) error {
-	// TODO: this should use a more robust method of writing state, by first
-	// writing to a temp file on the same filesystem, and renaming the file over
-	// the original.
-
 	defer s.mutex()()
 
 	if s.readFile == nil {
@@ -141,12 +140,44 @@ func (s *Filesystem) WriteState(state *states.State) error {
 }
 
 func (s *Filesystem) writeState(state *states.State, meta *SnapshotMeta) error {
+	s.file = s.file.DeepCopy()
+	if s.file == nil {
+		s.file = NewStateFile()
+	}
+	s.file.State = state.DeepCopy()
+
+	if meta != nil {
+		// Force new metadata
+		s.file.Lineage = meta.Lineage
+		s.file.Serial = meta.Serial
+		log.Printf("[TRACE] statemgr.Filesystem: forcing lineage %q serial %d for migration/import", s.file.Lineage, s.file.Serial)
+	}
+
+	return nil
+}
+
+// PersistState writes state to a tfstate file.
+func (s *Filesystem) PersistState(schemas *tofu.Schemas) error {
+	defer s.mutex()()
+
+	return s.persistState(schemas)
+}
+
+func (s *Filesystem) persistState(schemas *tofu.Schemas) error {
+	// TODO: this should use a more robust method of writing state, by first
+	// writing to a temp file on the same filesystem, and renaming the file over
+	// the original.
 	if s.stateFileOut == nil {
 		if err := s.createStateFiles(); err != nil {
 			return nil
 		}
 	}
 	defer s.stateFileOut.Sync()
+
+	if s.file == nil {
+		s.file = NewStateFile()
+	}
+	state := s.file.State
 
 	// We'll try to write our backup first, so we can be sure we've created
 	// it successfully before clobbering the original file it came from.
@@ -159,7 +190,7 @@ func (s *Filesystem) writeState(state *states.State, meta *SnapshotMeta) error {
 			}
 			defer bfh.Close()
 
-			err = statefile.Write(s.backupFile, bfh)
+			err = statefile.Write(s.backupFile, bfh, s.encryption)
 			if err != nil {
 				return fmt.Errorf("failed to write to local state backup file: %w", err)
 			}
@@ -182,12 +213,6 @@ func (s *Filesystem) writeState(state *states.State, meta *SnapshotMeta) error {
 		}
 	}
 
-	s.file = s.file.DeepCopy()
-	if s.file == nil {
-		s.file = NewStateFile()
-	}
-	s.file.State = state.DeepCopy()
-
 	if _, err := s.stateFileOut.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
@@ -201,22 +226,15 @@ func (s *Filesystem) writeState(state *states.State, meta *SnapshotMeta) error {
 		return nil
 	}
 
-	if meta == nil {
-		if s.readFile == nil || !statefile.StatesMarshalEqual(s.file.State, s.readFile.State) {
-			s.file.Serial++
-			log.Printf("[TRACE] statemgr.Filesystem: state has changed since last snapshot, so incrementing serial to %d", s.file.Serial)
-		} else {
-			log.Print("[TRACE] statemgr.Filesystem: no state changes since last snapshot")
-		}
+	if s.readFile == nil || !statefile.StatesMarshalEqual(s.file.State, s.readFile.State) {
+		s.file.Serial++
+		log.Printf("[TRACE] statemgr.Filesystem: state has changed since last snapshot, so incrementing serial to %d", s.file.Serial)
 	} else {
-		// Force new metadata
-		s.file.Lineage = meta.Lineage
-		s.file.Serial = meta.Serial
-		log.Printf("[TRACE] statemgr.Filesystem: forcing lineage %q serial %d for migration/import", s.file.Lineage, s.file.Serial)
+		log.Print("[TRACE] statemgr.Filesystem: no state changes since last snapshot")
 	}
 
 	log.Printf("[TRACE] statemgr.Filesystem: writing snapshot at %s", s.path)
-	if err := statefile.Write(s.file, s.stateFileOut); err != nil {
+	if err := statefile.Write(s.file, s.stateFileOut, s.encryption); err != nil {
 		return err
 	}
 
@@ -225,20 +243,14 @@ func (s *Filesystem) writeState(state *states.State, meta *SnapshotMeta) error {
 	return nil
 }
 
-// PersistState is an implementation of Persister that does nothing because
-// this type's Writer implementation does its own persistence.
-func (s *Filesystem) PersistState(_ context.Context, schemas *tofu.Schemas) error {
-	return nil
-}
-
 // RefreshState is an implementation of Refresher.
-func (s *Filesystem) RefreshState(ctx context.Context) error {
+func (s *Filesystem) RefreshState() error {
 	defer s.mutex()()
 	return s.refreshState()
 }
 
-func (s *Filesystem) GetRootOutputValues(ctx context.Context) (map[string]*states.OutputValue, error) {
-	err := s.RefreshState(ctx)
+func (s *Filesystem) GetRootOutputValues() (map[string]*states.OutputValue, error) {
+	err := s.RefreshState()
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +306,7 @@ func (s *Filesystem) refreshState() error {
 		reader = s.stateFileOut
 	}
 
-	f, err := statefile.Read(reader)
+	f, err := statefile.Read(reader, s.encryption)
 	// if there's no state then a nil file is fine
 	if err != nil {
 		if err != statefile.ErrNoState {
@@ -314,7 +326,7 @@ func (s *Filesystem) refreshState() error {
 }
 
 // Lock implements Locker using filesystem discretionary locks.
-func (s *Filesystem) Lock(_ context.Context, info *LockInfo) (string, error) {
+func (s *Filesystem) Lock(info *LockInfo) (string, error) {
 	defer s.mutex()()
 
 	if s.stateFileOut == nil {
@@ -346,7 +358,7 @@ func (s *Filesystem) Lock(_ context.Context, info *LockInfo) (string, error) {
 }
 
 // Unlock is the companion to Lock, completing the implementation of Locker.
-func (s *Filesystem) Unlock(_ context.Context, id string) error {
+func (s *Filesystem) Unlock(id string) error {
 	defer s.mutex()()
 
 	if s.lockID == "" {
@@ -457,7 +469,7 @@ func (s *Filesystem) WriteStateForMigration(f *statefile.File, force bool) error
 		return err
 	}
 
-	return nil
+	return s.persistState(nil)
 }
 
 // Open the state file, creating the directories and file as needed.
@@ -483,7 +495,7 @@ func (s *Filesystem) createStateFiles() error {
 
 	// If the file already existed with content then that'll be the content
 	// of our backup file if we write a change later.
-	s.backupFile, err = statefile.Read(s.stateFileOut)
+	s.backupFile, err = statefile.Read(s.stateFileOut, s.encryption)
 	if err != nil {
 		if err != statefile.ErrNoState {
 			return err

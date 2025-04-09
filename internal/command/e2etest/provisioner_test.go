@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package e2etest
@@ -15,12 +17,12 @@ import (
 func TestProvisioner(t *testing.T) {
 	t.Parallel()
 
-	// This test reaches out to releases.hashicorp.com to download the
+	// This test reaches out to registry.opentofu.org to download the
 	// template and null providers, so it can only run if network access is
 	// allowed.
 	skipIfCannotAccessNetwork(t)
 
-	tf := e2e.NewBinary(t, terraformBin, "testdata/provisioner")
+	tf := e2e.NewBinary(t, tofuBin, "testdata/provisioner")
 
 	//// INIT
 	_, stderr, err := tf.Run("init")

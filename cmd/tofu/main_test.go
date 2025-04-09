@@ -1,4 +1,6 @@
-// Copyright (c) HashiCorp, Inc.
+// Copyright (c) The OpenTofu Authors
+// SPDX-License-Identifier: MPL-2.0
+// Copyright (c) 2023 HashiCorp, Inc.
 // SPDX-License-Identifier: MPL-2.0
 
 package main
@@ -8,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/mitchellh/cli"
@@ -116,14 +119,9 @@ func TestMain_cliArgsFromEnv(t *testing.T) {
 
 	for i, tc := range cases {
 		t.Run(fmt.Sprintf("%d-%s", i, tc.Name), func(t *testing.T) {
-			os.Unsetenv(EnvCLI)
-			defer os.Unsetenv(EnvCLI)
-
 			// Set the env var value
 			if tc.Value != "" {
-				if err := os.Setenv(EnvCLI, tc.Value); err != nil {
-					t.Fatalf("err: %s", err)
-				}
+				t.Setenv(EnvCLI, tc.Value)
 			}
 
 			// Set up the args
@@ -223,14 +221,9 @@ func TestMain_cliArgsFromEnvAdvanced(t *testing.T) {
 				return testCommand, nil
 			}
 
-			os.Unsetenv(tc.EnvVar)
-			defer os.Unsetenv(tc.EnvVar)
-
 			// Set the env var value
 			if tc.Value != "" {
-				if err := os.Setenv(tc.EnvVar, tc.Value); err != nil {
-					t.Fatalf("err: %s", err)
-				}
+				t.Setenv(tc.EnvVar, tc.Value)
 			}
 
 			// Set up the args
@@ -274,8 +267,7 @@ func TestMain_autoComplete(t *testing.T) {
 		return &testCommandCLI{}, nil
 	}
 
-	os.Setenv("COMP_LINE", "tofu versio")
-	defer os.Unsetenv("COMP_LINE")
+	t.Setenv("COMP_LINE", "tofu versio")
 
 	// Run it!
 	os.Args = []string{"tofu", "tofu", "versio"}
@@ -333,6 +325,11 @@ func TestMkConfigDir_new(t *testing.T) {
 
 	mode := int(info.Mode().Perm())
 	expectedMode := 0755
+	// Unix permissions bits are not applicable on Windows. Perm() returns
+	// 0777 regardless of whether readonly or hidden flags are set.
+	if runtime.GOOS == "windows" {
+		expectedMode = 0777
+	}
 	if mode != expectedMode {
 		t.Fatalf("Expected mode: %04o, but got: %04o", expectedMode, mode)
 	}
@@ -364,6 +361,9 @@ func TestMkConfigDir_noparent(t *testing.T) {
 	// We wouldn't dare creating the home dir. If the parent of our config dir
 	// is missing, it's likely an issue with the system.
 	expectedError := fmt.Sprintf("mkdir %s: no such file or directory", tmpConfigDir)
+	if runtime.GOOS == "windows" {
+		expectedError = fmt.Sprintf("mkdir %s: The system cannot find the path specified.", tmpConfigDir)
+	}
 	if err.Error() != expectedError {
 		t.Fatalf("Expected error: %s, but got: %v", expectedError, err)
 	}
